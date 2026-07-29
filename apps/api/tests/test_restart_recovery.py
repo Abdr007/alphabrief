@@ -14,6 +14,7 @@ run instead of delivering it. Both are pinned here.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -164,6 +165,120 @@ class TestOrphanReconciliation:
         assert record is not None
         assert record["status"] == RunStatus.DELIVERED
         assert record["abort_reason"] is None
+
+
+class TestCheckpointerIsAsyncCapable:
+    """The graph is driven by `ainvoke`, so the saver must implement the async API.
+
+    langgraph's synchronous `PostgresSaver` inherits `aget_tuple` from
+    `BaseCheckpointSaver`, where it raises `NotImplementedError`. Pairing it with
+    an async graph failed every run the instant the Pregel loop opened. This was a
+    real outage the first time a Postgres URL was configured, so the invariant is
+    pinned rather than left to reviewer memory.
+    """
+
+    async def test_the_active_checkpointer_implements_aget_tuple(self, service: RunService) -> None:
+        from langgraph.checkpoint.base import BaseCheckpointSaver
+
+        saver = service._checkpointer
+        assert type(saver).aget_tuple is not BaseCheckpointSaver.aget_tuple
+
+    async def test_a_checkpoint_lookup_succeeds_rather_than_raising(
+        self, service: RunService
+    ) -> None:
+        """`_has_checkpoint` must answer False, not blow up, for an unknown thread."""
+        assert await service._has_checkpoint("run_never_existed") is False
+
+    async def test_the_sync_postgres_saver_is_the_wrong_one(self) -> None:
+        """Documents why `ensure_ready` awaits the async saver instead."""
+        from langgraph.checkpoint.base import BaseCheckpointSaver
+        from langgraph.checkpoint.postgres import PostgresSaver
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+        assert PostgresSaver.aget_tuple is BaseCheckpointSaver.aget_tuple
+        assert AsyncPostgresSaver.aget_tuple is not BaseCheckpointSaver.aget_tuple
+
+    async def test_a_sqlite_url_never_claims_durability(self, service: RunService) -> None:
+        await service.ensure_ready()
+        assert service._durable_checkpoints is False
+
+    async def test_an_unreachable_postgres_degrades_instead_of_crashing(
+        self, temp_database_url: str, repository: Repository
+    ) -> None:
+        """A database outage must cost durability, not the ability to run at all."""
+        unreachable = RunService(
+            settings=Settings(
+                database_url="postgresql://u:p@127.0.0.1:1/nope",
+                llm_engine="deterministic",
+                mcp_transport="inmemory",
+                approval_token="test-approval-token",
+            ),
+            repository=repository,
+        )
+        await unreachable.ensure_ready()
+        assert unreachable._durable_checkpoints is False
+        assert await unreachable._has_checkpoint("run_x") is False
+        await unreachable.shutdown()
+
+
+class TestLatencyIsHonest:
+    """Reported latency is machine time to produce the brief — nothing else.
+
+    `perf_counter` is process-relative, so once paused runs began surviving
+    restarts every approved-after-restart run reported 0.0s. And because
+    `_finalise` recomputed the figure *after* approval, a reviewer who took five
+    minutes to read a brief turned it into a five-minute brief. Both would have
+    quietly corrupted the number this project puts on a résumé.
+    """
+
+    async def test_elapsed_falls_back_to_the_persisted_timestamp(
+        self, service: RunService, repository: Repository
+    ) -> None:
+        await _seed(repository, "run_restarted", str(RunStatus.AWAITING_APPROVAL))
+        assert "run_restarted" not in service._started_at
+        assert await service._elapsed_ms("run_restarted") > 0.0
+
+    async def test_elapsed_prefers_the_monotonic_clock_when_in_process(
+        self, service: RunService, repository: Repository
+    ) -> None:
+        await _seed(repository, "run_inproc", str(RunStatus.RUNNING))
+        service._started_at["run_inproc"] = time.perf_counter()
+        assert 0.0 <= await service._elapsed_ms("run_inproc") < 5_000
+
+    async def test_an_unknown_run_reports_zero_rather_than_raising(
+        self, service: RunService
+    ) -> None:
+        assert await service._elapsed_ms("run_never_existed") == 0.0
+
+    async def test_human_deliberation_never_inflates_reported_latency(
+        self, service: RunService, repository: Repository
+    ) -> None:
+        await _seed(repository, "run_frozen", str(RunStatus.AWAITING_APPROVAL))
+        service._started_at["run_frozen"] = time.perf_counter()
+        await service._persist_metrics("run_frozen", {}, status=str(RunStatus.AWAITING_APPROVAL))
+        record = await repository.get_run("run_frozen")
+        assert record is not None
+        at_gate = record["latency_ms"]
+
+        # The reviewer goes for coffee, then approves.
+        service._started_at["run_frozen"] = time.perf_counter() - 600.0
+        await service._persist_metrics(
+            "run_frozen", {}, status=str(RunStatus.DELIVERED), record_latency=False
+        )
+        record = await repository.get_run("run_frozen")
+        assert record is not None
+        assert record["latency_ms"] == at_gate
+
+    async def test_a_crashed_run_records_the_time_it_burned(
+        self, service: RunService, repository: Repository
+    ) -> None:
+        await _seed(repository, "run_crash", str(RunStatus.RUNNING))
+        service._started_at["run_crash"] = time.perf_counter() - 2.0
+        await service._fail("run_crash", "provider exploded")
+        record = await repository.get_run("run_crash")
+        assert record is not None
+        assert record["status"] == RunStatus.FAILED
+        assert record["latency_ms"] >= 1_000
 
 
 class TestSuiteNeverMails:

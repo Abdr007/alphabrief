@@ -55,7 +55,7 @@ catches one inflated number stops believing all of them.
 > **Built a governed multi-agent research system (LangGraph + MCP) that makes
 > hallucinated numbers structurally impossible** — every figure is tool-computed,
 > independently recomputed by a deterministic verifier, and human-approved before
-> delivery. 100% numeric accuracy across 20 evaluated runs; 180 tests; ruff, mypy
+> delivery. 100% numeric accuracy across 20 evaluated runs; 190 tests; ruff, mypy
 > `--strict`, eslint and tsc all zero-warning.
 
 > **Shipped it end to end on free tiers for $0** — FastAPI + LangGraph + an MCP
@@ -78,7 +78,7 @@ catches one inflated number stops believing all of them.
 | End-to-end run success rate | **100.0%** | Same |
 | Tool-call error rate | **0.00%** | Same |
 | Supervisor iterations per brief | **2** | Fan-out, then route to writer |
-| Tests | **180** | `pytest -q` |
+| Tests | **190** | `pytest -q` |
 | Quality gates | **0 warnings** | ruff, ruff-format, mypy `--strict`, pytest (`filterwarnings=error`), eslint, tsc, next build |
 
 ### Stated as a projection, not a measurement

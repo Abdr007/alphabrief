@@ -57,9 +57,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(settings.log_level)
     repository = get_repository()
     await repository.create_all_async()
+    service = get_run_service()
+    # Must precede reconciliation: whether a paused run is resumable depends on
+    # the durability of the checkpointer, which this call establishes.
+    await service.ensure_ready()
     # Runs inherited from a previous process hold their watchlist's single active
     # slot forever unless they are closed here.
-    await get_run_service().reconcile_orphans()
+    await service.reconcile_orphans()
     logger.info(
         "AlphaBrief %s ready — engine=%s mcp=%s langfuse=%s smtp=%s",
         __version__,

@@ -16,7 +16,7 @@ human approves before anything ships.
 | --- | --- |
 | **Stack** | LangGraph · MCP (Model Context Protocol) · Claude Sonnet 4.6 + Haiku 4.5 · FastAPI · yfinance · Next.js 15 · Neon Postgres · Langfuse · Docker · GCP Cloud Run · Terraform · Vercel Cron |
 | **Cost** | `$0`. yfinance and RSS are free and keyless; Cloud Run, Vercel, Neon and Langfuse free tiers; ~$0.05–0.15 of Claude per full 5-ticker brief |
-| **Quality gates** | ruff · ruff-format · mypy `--strict` · 180 pytest tests · eslint · tsc · `next build` — all zero-warning |
+| **Quality gates** | ruff · ruff-format · mypy `--strict` · 190 pytest tests · eslint · tsc · `next build` — all zero-warning |
 | **Verification** | 100% of numeric claims recomputed from raw price bars before delivery |
 
 ---
@@ -352,7 +352,7 @@ alphabrief/
 │   │   │   ├── models/         brief schema · market contracts · SQLAlchemy tables
 │   │   │   ├── services/       runner · repository · render · email
 │   │   │   └── api/            routes · schemas
-│   │   └── tests/              180 tests incl. every mandated case
+│   │   └── tests/              190 tests incl. every mandated case
 │   └── web/                    Next.js 15 console
 ├── eval/                       run_eval.py → results.md
 ├── infra/terraform/            Cloud Run + Secret Manager, declaratively

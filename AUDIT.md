@@ -4,8 +4,8 @@ Every Definition-of-Done check from the build spec, the command that proves it,
 and the result. Where something is **not** fully verified, it says so and why —
 an audit that only contains passes is not an audit.
 
-**Audited:** 2026-07-29 · **Commit state:** working tree · **Machine:** macOS,
-Python 3.12.13, Node 24.9.0
+**Audited:** 2026-07-29, extended 2026-07-30 (live SMTP + Neon Postgres) ·
+**Machine:** macOS, Python 3.12.13, Node 24.9.0
 
 ---
 
@@ -14,7 +14,7 @@ Python 3.12.13, Node 24.9.0
 | # | Definition of Done | Status |
 | --- | --- | --- |
 | (a) | ruff + mypy + eslint + tsc clean | ✅ PASS |
-| (b) | pytest green, including all six mandated tests | ✅ PASS — 180 tests |
+| (b) | pytest green, including all six mandated tests | ✅ PASS — 190 tests |
 | (c) | e2e: RUN streams telemetry → pauses at gate → approve delivers + archives | ✅ PASS — including a real SMTP send |
 | (d) | Verification shows all-green on a clean run, red on injected fault | ✅ PASS |
 | (e) | Eval completes with 100% post-verification numeric accuracy | ✅ PASS — 20/20 runs |
@@ -24,8 +24,15 @@ Python 3.12.13, Node 24.9.0
 a real Gmail delivery — see (c). No known correctness, security or reliability
 defects are outstanding.
 
-Configuring SMTP exposed one genuine reliability defect, R-1 below, which is now
-fixed and pinned by 13 regression tests.
+Wiring the two real credentials exposed three genuine defects, all now fixed and
+pinned by 23 regression tests: **R-1** (a restart permanently wedged a watchlist,
+and approving a lost run destroyed it while returning HTTP 200), **R-2** (the
+Postgres checkpointer was the synchronous saver, which does not implement the
+async interface the graph runs on, so every run crashed) and **R-3** (reported
+latency was zeroed by a restart, inflated by the reviewer's own reading time, and
+absent on failures). All three sat in code that passed every gate for the entire
+build — they were reachable only with real infrastructure attached, which is
+exactly why they are written up here rather than quietly patched.
 
 ---
 
@@ -83,7 +90,7 @@ Notes on rigour, so the "clean" is meaningful rather than configured away:
 
 ```
 $ cd apps/api && python -m pytest tests/ -q
-180 passed
+190 passed
 ```
 
 | File | Tests | Covers |
@@ -94,7 +101,7 @@ $ cd apps/api && python -m pytest tests/ -q
 | `test_verifier.py` | 20 | Dual-path metric agreement, mismatch detection, regeneration routing |
 | `test_degradation.py` | 12 | Fake ticker, dead network, empty RSS |
 | `test_mcp_server.py` | 12 | Tool discovery, live calls, caching, rate limiting, bounds |
-| `test_restart_recovery.py` | 13 | Orphan reconciliation, un-resumable approvals, SMTP kept out of the suite |
+| `test_restart_recovery.py` | 23 | Orphan reconciliation, un-resumable approvals, async-checkpointer invariant, honest latency, SMTP kept out of the suite |
 | `test_integration.py` | 11 | Full chain, human gate, fault-injection modes, concurrency |
 | `test_repository.py` | 11 | Transactions, the active-run constraint, archival |
 | `test_loop_safety.py` | 10 | Iteration cap, forced-loop termination, budget guard |
@@ -344,13 +351,107 @@ reconciled 1 orphaned run(s) from a previous process
 
 ---
 
+## R-2 — the Postgres checkpointer never worked (HIGH, fixed)
+
+Found the first time a real Neon URL was configured, which is exactly where an
+untested code path should be expected to fail.
+
+**Every run crashed instantly** with a bare `NotImplementedError`:
+
+```
+File "langgraph/pregel/_loop.py", line 1912, in __aenter__
+  saved = await self.checkpointer.aget_tuple(self.checkpoint_config)
+File "langgraph/checkpoint/base/__init__.py", line 441, in aget_tuple
+  raise NotImplementedError
+```
+
+langgraph ships **two** Postgres savers. The synchronous `PostgresSaver` does not
+implement the async interface at all — it inherits `aget_tuple` from
+`BaseCheckpointSaver`, where the body is `raise NotImplementedError`. This graph is
+driven by `ainvoke`, so the Pregel loop hit that method before executing a single
+node. The code type-checked cleanly under `mypy --strict` and had passed every gate
+for the whole build, because nothing had ever pointed it at a Postgres URL.
+
+**Fix.** `ensure_ready()`, awaited in the FastAPI lifespan before reconciliation,
+connects `psycopg.AsyncConnection`, awaits `AsyncPostgresSaver.setup()` and
+rebuilds the graph around it. The sync branch is deleted rather than repaired —
+it is unusable by construction here. `__init__` keeps the in-memory saver so the
+service is always constructible, and an unreachable database now degrades to
+volatile checkpoints instead of failing every run.
+
+`_has_checkpoint` was also switched to `aget_tuple`: probing durability through a
+method the saver does not implement would have reported *every* paused run as
+unresumable, silently re-introducing R-1.
+
+Pinned by five tests that encode the root cause without needing a live database —
+including one asserting the invariant directly:
+
+```python
+assert PostgresSaver.aget_tuple is BaseCheckpointSaver.aget_tuple  # the trap
+assert AsyncPostgresSaver.aget_tuple is not BaseCheckpointSaver.aget_tuple  # the fix
+```
+
+### Durability proven end to end
+
+With Neon configured, the guarantee R-1 could only describe was demonstrated:
+
+```
+1. POST /api/run  MSFT,NVDA        → AWAITING_APPROVAL
+2. kill -TERM the API process      → server gone while the run sits at the gate
+3. restart                         → AsyncPostgresSaver (durable)
+                                     run ... kept: durable checkpoint intact at the gate
+4. GET  /v1/runs/{id}              → still AWAITING_APPROVAL
+5. POST /api/decision/{id}         → {"status":"DELIVERED"}
+                                     delivery.sent  delivered to 1 recipient(s) via smtp.gmail.com
+```
+
+The approval was accepted by a **process that had not existed** when the brief was
+written. On SQLite the same sequence correctly closes the run instead (R-1), so
+both branches of the reconciliation rule are now exercised against real
+infrastructure rather than only in tests.
+
+---
+
+## R-3 — reported latency was wrong three different ways (MEDIUM, fixed)
+
+Noticed while checking the archive after the Neon switch: every run displayed
+**0.0s**. The investigation found three faults in a single metric — the one this
+project quotes on a résumé.
+
+1. **Zeroed by a restart.** Start time lived only in an in-process dict keyed on
+   `time.perf_counter()`, which is process-relative. Once paused runs began
+   surviving restarts (R-2), every approved-after-restart run reported `0.0`.
+2. **Inflated by human deliberation.** `_finalise` *recomputed* latency after the
+   approval resumed the graph, so the figure silently included however long the
+   reviewer spent reading. A five-minute coffee break became a five-minute brief.
+   Earlier measurements only looked sane because approvals were scripted to fire
+   immediately — the bug was invisible precisely when a human was not involved.
+3. **Never recorded on failure.** `_fail` wrote status and reason but no timing,
+   so a crashed run claimed to have consumed no time at all.
+
+**Fix.** `_elapsed_ms()` prefers the monotonic clock and falls back to the
+persisted `created_at` — wall-clock, so it survives a restart. Latency is
+**frozen when the brief reaches the gate**, which is the machine work;
+`_finalise` now passes `record_latency=False` rather than recomputing. `_fail`
+records elapsed time too.
+
+The definition is now stated rather than implied: **latency is the time from
+trigger until the brief was ready for review.** Human time is deliberately
+excluded, and the archive's mean is therefore comparable across runs whether a
+reviewer approved instantly or overnight.
+
+Pinned by five tests, including one that approves after a simulated ten-minute
+delay and asserts the recorded figure did not move.
+
+---
+
 ## What is deliberately not claimed
 
 - **Paused runs do not survive a restart on SQLite.** The in-memory checkpointer
-  is volatile by nature; a run waiting at the gate is closed by reconciliation
-  rather than resumed (R-1). Pointing `DATABASE_URL` at Postgres switches to
-  `PostgresSaver` and the gate then survives — that branch is covered by tests
-  but has not been exercised against a real Postgres instance.
+  is volatile by nature, so a run waiting at the gate is closed by reconciliation
+  rather than resumed (R-1). This is a property of the configuration, not a
+  defect: with `DATABASE_URL` on Postgres the gate survives, verified against a
+  live Neon instance (R-2).
 - **Cloud Run and Vercel deployment have not been executed.** The container is
   built and verified running locally (above), but the Terraform module and
   gcloud commands are written and reviewed rather than applied — that needs a

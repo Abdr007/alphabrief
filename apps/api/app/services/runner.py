@@ -86,6 +86,10 @@ class RunService:
         self.tracer = tracer or get_tracer()
         #: True only when checkpoints outlive the process (Postgres).
         self._durable_checkpoints = False
+        #: Guards the one-time async upgrade performed by `ensure_ready`.
+        self._checkpointer_ready = False
+        #: Held so shutdown can close it; only set on the Postgres path.
+        self._pg_connection: Any | None = None
         self._checkpointer = self._build_checkpointer()
         self.graph: CompiledStateGraph[Any, Any, Any, Any] = build_graph(self._checkpointer)
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -93,48 +97,84 @@ class RunService:
 
     # ------------------------------------------------------------ checkpointer ---
     def _build_checkpointer(self) -> Any:
-        """Postgres checkpointer when configured, else an in-process saver.
+        """The in-process saver the service always starts with.
 
-        Both are given a strict serializer allowlisted to AlphaBrief's own models
-        (see :mod:`app.services.serde`), so checkpoint bytes can never rehydrate
-        an arbitrary type.
+        Postgres cannot be set up here: the async saver needs an awaited
+        connection and an awaited ``setup()``, and ``__init__`` cannot await.
+        :meth:`ensure_ready` performs that upgrade during application startup.
+
+        Every saver is given a strict serializer allowlisted to AlphaBrief's own
+        models (see :mod:`app.services.serde`), so checkpoint bytes can never
+        rehydrate an arbitrary type.
         """
         serde = build_checkpoint_serde()
-        url = self.settings.database_url
-        if url.startswith(("postgres://", "postgresql://", "postgresql+")):
-            try:
-                from langgraph.checkpoint.postgres import PostgresSaver
-                from psycopg import Connection
-                from psycopg.rows import dict_row
-
-                from app.services.repository import normalise_database_url
-
-                dsn = normalise_database_url(url).replace("postgresql+psycopg://", "postgresql://")
-                connection = Connection.connect(
-                    dsn, autocommit=True, prepare_threshold=0, row_factory=dict_row
-                )
-                saver = PostgresSaver(connection, serde=serde)
-                saver.setup()
-                self._durable_checkpoints = True
-                logger.info("LangGraph checkpointer: PostgresSaver (durable)")
-                return saver
-            except Exception:
-                logger.warning(
-                    "Postgres checkpointer unavailable; falling back to in-memory saver",
-                    exc_info=True,
-                )
         from langgraph.checkpoint.memory import InMemorySaver
 
         self._durable_checkpoints = False
         logger.info("LangGraph checkpointer: InMemorySaver (paused runs end at shutdown)")
         return InMemorySaver(serde=serde)
 
+    async def ensure_ready(self) -> None:
+        """Upgrade to a durable checkpointer when Postgres is configured.
+
+        Called once during application startup, before reconciliation.
+
+        The **async** saver is mandatory here, not a preference: the graph is
+        driven by ``ainvoke``, and langgraph's synchronous ``PostgresSaver``
+        inherits ``aget_tuple`` from the base class, where it raises
+        ``NotImplementedError``. Pairing it with an async graph fails every run
+        the moment the loop opens.
+
+        Falls back to the in-memory saver on any connection problem: a database
+        outage should cost durability, not the ability to produce briefs.
+        """
+        if self._checkpointer_ready:
+            return
+        self._checkpointer_ready = True
+
+        url = self.settings.database_url
+        if not url.startswith(("postgres://", "postgresql://", "postgresql+")):
+            return
+
+        try:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            from psycopg import AsyncConnection
+            from psycopg.rows import dict_row
+
+            from app.services.repository import normalise_database_url
+
+            dsn = normalise_database_url(url).replace("postgresql+psycopg://", "postgresql://")
+            # prepare_threshold=0 because the pooled endpoint multiplexes
+            # sessions; server-side prepared statements do not survive that.
+            connection = await AsyncConnection.connect(
+                dsn, autocommit=True, prepare_threshold=0, row_factory=dict_row
+            )
+            saver = AsyncPostgresSaver(connection, serde=build_checkpoint_serde())
+            await saver.setup()
+        except Exception:
+            logger.warning(
+                "Postgres checkpointer unavailable; staying on the in-memory saver",
+                exc_info=True,
+            )
+            return
+
+        self._pg_connection = connection
+        self._checkpointer = saver
+        self.graph = build_graph(saver)
+        self._durable_checkpoints = True
+        logger.info("LangGraph checkpointer: AsyncPostgresSaver (durable)")
+
     # ------------------------------------------------------------ reconcile ---
     async def _has_checkpoint(self, run_id: str) -> bool:
-        """Whether the checkpointer still holds a resumable thread for this run."""
+        """Whether the checkpointer still holds a resumable thread for this run.
+
+        Uses the async interface because that is the one the graph itself uses —
+        checking through a path the saver does not actually implement would make
+        every run look unresumable.
+        """
         config = {"configurable": {"thread_id": run_id}}
         try:
-            return await asyncio.to_thread(self._checkpointer.get, config) is not None
+            return await self._checkpointer.aget_tuple(config) is not None
         except Exception:
             logger.warning("checkpoint lookup failed for %s", run_id, exc_info=True)
             return False
@@ -293,6 +333,10 @@ class RunService:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self.tracer.flush()
+        if self._pg_connection is not None:
+            with contextlib.suppress(Exception):
+                await self._pg_connection.close()
+            self._pg_connection = None
 
     # --------------------------------------------------------------- internal ---
     def _context(self, run_id: str, mcp: McpToolClient, budget: BudgetGuard) -> Any:
@@ -438,7 +482,10 @@ class RunService:
                 markdown=render_markdown(brief),
             )
 
-        await self._persist_metrics(run_id, result, status=status)
+        # record_latency=False: the reported latency is the machine time to
+        # produce the brief, measured when it reached the gate. Everything after
+        # that point is a human reading it.
+        await self._persist_metrics(run_id, result, status=status, record_latency=False)
         await self.repository.finish_run(run_id, status)
         await self.bus.publish(
             run_id,
@@ -452,27 +499,59 @@ class RunService:
         )
         await self._archive_events(run_id)
 
+    async def _elapsed_ms(self, run_id: str) -> float:
+        """Milliseconds of machine work since the run was triggered.
+
+        Prefers the in-process monotonic clock, which is immune to wall-clock
+        adjustments. Falls back to the persisted `created_at`, because
+        `perf_counter` is process-relative and therefore meaningless after a
+        restart — and now that paused runs legitimately survive restarts, that
+        fallback is a normal path rather than an edge case.
+        """
+        started = self._started_at.get(run_id)
+        if started is not None:
+            return (time.perf_counter() - started) * 1000
+        record = await self.repository.get_run(run_id)
+        created_raw = record.get("created_at") if record else None
+        if not isinstance(created_raw, str):
+            return 0.0
+        try:
+            created = datetime.fromisoformat(created_raw)
+        except ValueError:
+            return 0.0
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=UTC)
+        return max(0.0, (datetime.now(UTC) - created).total_seconds() * 1000)
+
     async def _persist_metrics(
         self,
         run_id: str,
         result: dict[str, Any],
         status: str | None = None,
         verified: bool | None = None,
+        *,
+        record_latency: bool = True,
     ) -> None:
+        """Write run metrics.
+
+        `record_latency=False` preserves the measurement taken when the brief
+        reached the gate. Recomputing after approval would fold the reviewer's
+        deliberation time into a figure that is reported as the system's
+        latency — a five-minute coffee break would read as a five-minute brief.
+        """
         spend = _spend(result)
-        started = self._started_at.get(run_id)
-        latency_ms = (time.perf_counter() - started) * 1000 if started else 0.0
         fields: dict[str, Any] = {
             "iterations": int(result.get("iterations", 0)),
             "model_calls": spend.calls,
             "input_tokens": spend.input_tokens,
             "output_tokens": spend.output_tokens,
             "cost_usd": spend.cost_usd,
-            "latency_ms": latency_ms,
             "tool_calls": len(result.get("tool_calls", [])),
             "partial": is_partial(_as_state(result)),
             "error_count": len(result.get("errors", [])),
         }
+        if record_latency:
+            fields["latency_ms"] = await self._elapsed_ms(run_id)
         if status is not None:
             fields["status"] = status
         if verified is not None:
@@ -480,7 +559,14 @@ class RunService:
         await self.repository.update_run(run_id, **fields)
 
     async def _fail(self, run_id: str, reason: str) -> None:
-        await self.repository.finish_run(run_id, str(RunStatus.FAILED), abort_reason=reason)
+        # A crashed run still consumed real time; leaving latency at 0 would
+        # understate the cost of a failure in the archive.
+        await self.repository.finish_run(
+            run_id,
+            str(RunStatus.FAILED),
+            abort_reason=reason,
+            latency_ms=await self._elapsed_ms(run_id),
+        )
         await self.bus.publish(run_id, EventKind.RUN_FAILED, reason, {"reason": reason})
         await self._archive_events(run_id)
 
