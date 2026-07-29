@@ -182,10 +182,10 @@ uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e ".[dev]"
 
 cp ../../.env.example ../../.env      # then edit
-.venv/bin/uvicorn app.main:app --port 7860 --reload
+.venv/bin/uvicorn app.main:app --port 7877 --reload
 ```
 
-Open <http://127.0.0.1:7860/docs>.
+Open <http://127.0.0.1:7877/docs>.
 
 **You do not need a Claude API key to run this.** With `ANTHROPIC_API_KEY`
 unset, the app uses a deterministic engine that drives the *identical* graph,
@@ -198,12 +198,12 @@ keeps CI and the 20-run eval free. Add the key and it switches to Claude.
 ```bash
 cd apps/web
 npm install
-ALPHABRIEF_API_URL=http://127.0.0.1:7860 \
+ALPHABRIEF_API_URL=http://127.0.0.1:7877 \
 ALPHABRIEF_APPROVAL_TOKEN=<same as APPROVAL_TOKEN> \
 npm run dev
 ```
 
-Open <http://localhost:3000> and press **RUN**.
+Open <http://localhost:3001> and press **RUN**.
 
 The browser never talks to the API directly — every call is proxied through a
 Next route handler so the approval token stays server-side.
@@ -221,8 +221,8 @@ make eval       # 20 scored runs → eval/results.md
 
 | Service | Free tier used | Limit to respect |
 | --- | --- | --- |
-| **GCP Cloud Run** *(primary API host)* | 2M requests + 360k GB-seconds/month, forever | Keep `min_instance_count = 0`; 1 vCPU / 512Mi |
-| **Hugging Face Spaces** *(no-card fallback)* | Docker Space, port 7860 | Warm it before a demo — cold start |
+| **GCP Cloud Run** *(primary API host)* | 2M requests + 360k GB-seconds/month, forever | Keep `min_instance_count = 0`; 1 vCPU / 512Mi. Needs a card on file, though this usage does not bill |
+| **Koyeb** *(no-card fallback)* | 1 web service from a Docker image | 0.1 vCPU / 512Mi is tight for pandas — expect slower briefs than the figures below |
 | **Vercel** | Hobby: web + Cron | Cron on Hobby is once/day — exactly the 07:00 run |
 | **Neon** | Free Postgres | Ample for runs, briefs, approvals |
 | **Langfuse** | Free tier | Ample for traces |
@@ -262,12 +262,15 @@ terraform init
 terraform apply -var project_id=$PROJECT -var image=$REPO/api:v1
 ```
 
-### Hugging Face Spaces (no card ever needed)
+### Koyeb (no card needed)
 
-Create a **Docker** Space, push this repo, and point it at
-`apps/api/Dockerfile`. The image already listens on 7860 and runs as uid 1000,
-which is what Spaces expects. Set the same environment variables as Space
-secrets.
+Create a web service from `apps/api/Dockerfile`. The image already listens on
+7860 and runs as **uid 1000**, so it drops straight onto any host that refuses
+root — no changes needed. Set the same environment variables as service secrets.
+
+The free instance is 0.1 vCPU / 512 MiB. `yfinance` pulls in pandas and numpy, so
+memory is tight and briefs are slower than the figures in this README, which were
+measured on a laptop. Fine for a shareable link; use Cloud Run for a live demo.
 
 ### Vercel (web + cron)
 

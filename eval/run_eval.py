@@ -139,6 +139,15 @@ def _configure_environment(database_url: str) -> None:
     os.environ.setdefault("PROVIDER_MIN_INTERVAL_SECONDS", "0.15")
     os.environ.setdefault("APPROVAL_TOKEN", "eval-local-token")
     os.environ.setdefault("LOG_LEVEL", "WARNING")
+    # The eval approves every run to free its watchlist slot, and `Settings`
+    # reads `../../.env` — so a working operator credential would make `make
+    # eval` mail a real inbox once per scored run. Assigned rather than
+    # setdefault: this has to beat the dotenv file.
+    os.environ["SMTP_HOST"] = ""
+    os.environ["SMTP_USERNAME"] = ""
+    os.environ["SMTP_PASSWORD"] = ""
+    os.environ["SMTP_FROM"] = ""
+    os.environ["SMTP_TO"] = ""
 
 
 async def _await_gate(service: Any, run_id: str, timeout_s: float = 180.0) -> dict[str, Any]:
@@ -235,7 +244,7 @@ async def run_eval(count: int, tickers: list[str]) -> EvalReport:
             f"  [{index:>2}/{count}] {flag} {outcome.status:<18} "
             f"claims {outcome.claims_matched}/{outcome.claims_checked} "
             f"tools {outcome.tool_calls} "
-            f"{outcome.latency_ms / 1000:.1f}s ${outcome.cost_usd:.4f}"
+            f"{outcome.latency_ms / 1000:.2f}s ${outcome.cost_usd:.4f}"
         )
         # Release the watchlist slot so the next run may start.
         await _release(service, outcome.run_id)

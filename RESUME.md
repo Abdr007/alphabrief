@@ -150,7 +150,7 @@ Latency & Cost Optimization, CI Quality Gates (ruff, mypy, pytest)
 **Backend & Data:** FastAPI, REST APIs, Pydantic, PostgreSQL (Neon), SQLAlchemy,
 pandas, Anomaly Detection, SSE Streaming
 
-**Cloud & Infra:** GCP (Cloud Run), Docker, Vercel, Terraform (IaC), Hugging Face
+**Cloud & Infra:** GCP (Cloud Run), Docker, Vercel, Terraform (IaC), Neon Postgres
 Spaces, n8n, GitHub Actions
 
 ### ATS terms this project earns honestly

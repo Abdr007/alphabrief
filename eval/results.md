@@ -1,6 +1,6 @@
 # AlphaBrief — Evaluation Results
 
-- **Generated:** 2026-07-29T16:31:40+00:00
+- **Generated:** 2026-07-29T22:01:13+00:00
 - **Runs scored:** 20
 - **Watchlist:** AAPL, MSFT, NVDA
 - **Model engine:** `deterministic`
@@ -14,9 +14,9 @@
 | Post-verification numeric accuracy | 100.00% | 100% |
 | Tool-call error rate | 0.00% | ≤ 5% |
 | Average cost per brief | $0.0000 | ≤ $0.15 |
-| Cold-start latency (run 1, live provider calls) | 4.42s | — |
+| Cold-start latency (run 1, live provider calls) | 4.29s | — |
 | Warm latency per brief (runs 2–N, cached providers) | 0.03s | — |
-| p95 latency per brief | 0.07s | — |
+| p95 latency per brief | 0.03s | — |
 
 ### Reading these numbers honestly
 
@@ -60,16 +60,16 @@ the system to show the checks actually fire.
 
 | # | Status | Verified | Claims matched | Tool calls | Iterations | Latency | Cost |
 | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 4.42s | $0.0000 |
+| 1 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 4.29s | $0.0000 |
 | 2 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
 | 3 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
 | 4 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
 | 5 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
 | 6 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
 | 7 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
-| 8 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.06s | $0.0000 |
-| 9 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.05s | $0.0000 |
-| 10 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.04s | $0.0000 |
+| 8 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
+| 9 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
+| 10 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
 | 11 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
 | 12 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
 | 13 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
@@ -79,7 +79,7 @@ the system to show the checks actually fire.
 | 17 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
 | 18 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
 | 19 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
-| 20 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.07s | $0.0000 |
+| 20 | AWAITING_APPROVAL | True | 21/21 | 12 | 2 | 0.03s | $0.0000 |
 
 ---
 

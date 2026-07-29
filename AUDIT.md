@@ -135,8 +135,8 @@ message rather than silently passing on fake data.
 
 ## (c) End-to-end
 
-Verified against a running API (`:7871`) and a production build of the console
-(`:3021`), driving the console's own route handlers — not the API directly.
+Verified against a running API (`:7877`) and a production build of the console
+(`:3001`), driving the console's own route handlers — not the API directly.
 
 ```
 1. POST /api/run                      → 202, run_e2f9a278c71a4dbf8c5d
@@ -152,7 +152,7 @@ Verified against a running API (`:7871`) and a production build of the console
 6. POST /api/decision/{id}             → {"status": "DELIVERED"}  (route injects the
                                               server-side token)
 7. GET  /v1/runs/{id}                  → DELIVERED · verified · 2 iterations ·
-                                          15 tool calls · 3578 ms
+                                          15 tool calls
 8. GET  /api/archive                   → the run, with headline and status
 ```
 
@@ -207,7 +207,7 @@ $ python eval/run_eval.py --runs 20 --tickers AAPL,MSFT,NVDA
   numeric accuracy        100.00%
   tool-call error rate    0.00%
   avg cost / brief        $0.0000 (deterministic engine)
-  cold-start latency      4.42s (live providers)
+  cold-start latency      4.29s (live providers)
   warm latency / brief    0.03s (cached providers)
 
   RESULT: PASS
