@@ -26,13 +26,17 @@ FROM base AS deps
 WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY app ./app
-RUN pip install --no-cache-dir .
+# --root-user-action=ignore: this is a throwaway build stage, so installing as
+# root is correct here and pip's "use a virtualenv" advice does not apply. The
+# flag silences the warning instead of leaving it in every build log.
+RUN pip install --no-cache-dir --root-user-action=ignore .
 
 # --------------------------------------------------------------- runtime ----
 FROM base AS runtime
 
-# Hugging Face Spaces runs containers as uid 1000; matching it here means the
-# same image works on Spaces and Cloud Run without a rebuild.
+# Run as a fixed non-root uid 1000. Several hosts (Koyeb, Cloud Run, and
+# container platforms that refuse root) either require this or behave better
+# with it, so the same image deploys anywhere without a rebuild.
 RUN useradd --create-home --uid 1000 alphabrief
 
 COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages

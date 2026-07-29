@@ -1,5 +1,7 @@
 # AlphaBrief
 
+[![CI](https://github.com/Abdr007/alphabrief/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Abdr007/alphabrief/actions/workflows/ci.yml)
+
 **Multi-Agent Research Orchestration System with MCP Tooling & Human-in-the-Loop Governance**
 
 A supervisor-pattern agent system that produces a verified morning research brief

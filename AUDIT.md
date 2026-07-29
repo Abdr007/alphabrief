@@ -484,6 +484,39 @@ mailed a real inbox from the integration tests.
 
 ---
 
+## Dependency posture
+
+`npm audit` reports 9 high-severity advisories. Every one is a **development-only**
+transitive dependency of `eslint-config-next`: `minimatch` → `brace-expansion`, a
+denial-of-service via unbounded brace expansion. None reach the shipped
+application, and the linter only ever processes this repository's own files.
+
+They are not silenced, because both available "fixes" are worse than the finding:
+
+- `npm audit fix --force` downgrades `next` to **9.3.3** and `@eslint/eslintrc` to
+  **0.1.0** — years-old majors, to patch a DoS in a linter.
+- Overriding `brace-expansion` to the patched `5.0.8` fails: that release is
+  **ESM-only**, and `minimatch@3` loads it with `require()`.
+- Upgrading to `eslint@10`, which *is* outside the advisory range, breaks linting
+  outright — the `eslint-plugin-react` bundled with `eslint-config-next` calls
+  `context.getFilename()`, an API eslint 10 removed. Verified by trying it.
+
+What *was* fixed, because those two were genuinely reachable:
+
+| Was | Now | Why it mattered |
+| --- | --- | --- |
+| `postcss` 8.4.31 nested inside `next` | overridden to 8.5.25 | XSS via unescaped `</style>`, plus two source-map path-traversal advisories |
+| `sharp` < 0.35.0 | overridden to 0.35.3 | four libvips CVEs in the image pipeline |
+| `framer-motion` 5.6 MB | removed | dead weight — zero imports since the console was rebuilt |
+
+That took the count from 12 to 9 and removed both advisories with any runtime
+reach. One `npm warn ERESOLVE` also remains in CI logs: an *optional* wasm
+fallback binding peers on `@emnapi/core@^2.0.0-alpha.3`, which has no stable
+release. Installing an alpha into a code path CI never executes — the native
+binary is used — would be a worse trade than the warning.
+
+---
+
 ## What is deliberately not claimed
 
 - **Paused runs do not survive a restart on SQLite.** The in-memory checkpointer
