@@ -224,7 +224,7 @@ make eval       # 20 scored runs → eval/results.md
 | Service | Free tier used | Limit to respect |
 | --- | --- | --- |
 | **GCP Cloud Run** *(primary API host)* | 2M requests + 360k GB-seconds/month, forever | Keep `min_instance_count = 0`; 1 vCPU / 512Mi. Needs a card on file, though this usage does not bill |
-| **Koyeb** *(no-card fallback)* | 1 web service from a Docker image | 0.1 vCPU / 512Mi is tight for pandas — expect slower briefs than the figures below |
+| **Koyeb** *(no-card fallback, untested)* | 1 web service from a Docker image | 0.1 vCPU / 512Mi. pandas and numpy arrive via yfinance, so memory is tight — a sibling project with a heavier stack was OOM-killed at this size |
 | **Vercel** | Hobby: web + Cron | Cron on Hobby is once/day — exactly the 07:00 run |
 | **Neon** | Free Postgres | Ample for runs, briefs, approvals |
 | **Langfuse** | Free tier | Ample for traces |

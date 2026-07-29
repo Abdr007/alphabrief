@@ -18,12 +18,12 @@ install: ## Create the venv and install API + web dependencies
 
 # ------------------------------------------------------------------- run ----
 .PHONY: api
-api: ## Run the API on :7860 with reload
-	cd apps/api && .venv/bin/uvicorn app.main:app --port 7860 --reload
+api: ## Run the API on :7877 with reload
+	cd apps/api && .venv/bin/uvicorn app.main:app --port 7877 --env-file ../../.env --reload
 
 .PHONY: web
-web: ## Run the Next.js console on :3000
-	cd $(WEB) && npm run dev
+web: ## Run the Next.js console on :3001
+	cd $(WEB) && npm run dev -- --port 3001
 
 .PHONY: mcp
 mcp: ## Run the MCP tool server standalone over stdio
@@ -78,8 +78,8 @@ docker: ## Build the API container
 	docker build -t alphabrief-api -f apps/api/Dockerfile apps/api
 
 .PHONY: docker-run
-docker-run: ## Run the API container on :7860
-	docker run --rm -p 7860:7860 --env-file .env alphabrief-api
+docker-run: ## Run the API container, published on :7877
+	docker run --rm -p 7877:7860 --env-file .env alphabrief-api
 
 .PHONY: clean
 clean: ## Remove caches and local databases
