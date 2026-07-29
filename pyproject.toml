@@ -1,0 +1,116 @@
+# AlphaBrief — repo-root Python quality gate.
+#
+# One ruff config and one mypy config cover the whole Python surface
+# (apps/api/app, apps/api/tests, eval/) so `make lint` and `make types` are a
+# single command each. Package metadata + pytest config live in
+# apps/api/pyproject.toml.
+
+# ---------------------------------------------------------------- ruff ------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv", "apps/web", "node_modules"]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "B",     # flake8-bugbear
+    "C4",    # comprehensions
+    "UP",    # pyupgrade
+    "ARG",   # unused arguments
+    "SIM",   # simplify
+    "TID",   # tidy imports
+    "PTH",   # prefer pathlib
+    "RUF",   # ruff-specific
+    "ASYNC", # async correctness
+    "S",     # bandit security
+    "DTZ",   # timezone-aware datetimes
+    "T20",   # no stray print()
+    "RET",   # return simplification
+    "N",     # pep8-naming
+    "A",     # builtin shadowing
+    "PIE",   # misc lints
+    "PL",    # pylint subset
+    "BLE",   # blind except — every broad catch must be justified with a noqa
+    "C90",   # mccabe complexity
+]
+ignore = [
+    "E501",    # line length is the formatter's job
+    "B008",    # FastAPI Depends() in argument defaults is the documented idiom
+    "PLR0913", # graph nodes legitimately take several typed arguments
+    "PLR2004", # magic-value comparisons are readable in numeric verification code
+    # Lazy imports are deliberate here: heavy optional dependencies (anthropic,
+    # yfinance, feedparser, the Postgres checkpointer) must not be imported at
+    # module scope, both for startup time and so the package imports cleanly when
+    # an optional backend is absent.
+    "PLC0415",
+    # Typographic characters (→ ⇄ ≤ ∥ —) are used deliberately in documentation.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.pylint]
+# The pylint defaults (12/50) are arbitrary; these functions are cohesive
+# verification and assembly routines that read worse when fragmented.
+max-branches = 20
+max-statements = 70
+
+[tool.ruff.lint.mccabe]
+max-complexity = 18
+
+[tool.ruff.lint.per-file-ignores]
+"apps/api/tests/*" = ["S101", "ARG001", "ARG002", "S105", "S106", "PLR2004", "PLC0415"]
+"eval/*" = ["T20", "S101", "PLC0415"]
+"apps/api/app/mcp_server/__main__.py" = ["T20"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true
+
+# ---------------------------------------------------------------- mypy ------
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "apps/api"
+files = ["apps/api/app", "apps/api/tests", "eval"]
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_optional = true
+show_error_codes = true
+pretty = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+    "yfinance.*",
+    "feedparser.*",
+    "langfuse.*",
+    "langgraph.*",
+    "langgraph.checkpoint.*",
+    "mcp.*",
+    "sse_starlette.*",
+    "pandas.*",
+    "numpy.*",
+    "psycopg.*",
+    "psycopg_pool.*",
+]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true

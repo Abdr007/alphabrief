@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: API — ruff · mypy · pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        working-directory: apps/api
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python -e ".[dev]"
+          uv pip install --python .venv/bin/python asgi-lifespan
+
+      - name: ruff
+        run: apps/api/.venv/bin/python -m ruff check .
+
+      - name: ruff format
+        run: apps/api/.venv/bin/python -m ruff format --check .
+
+      - name: mypy --strict
+        run: apps/api/.venv/bin/python -m mypy
+
+      # No ANTHROPIC_API_KEY in CI: the deterministic engine drives the same
+      # graph, the same MCP tools and the same verifier, so the suite is free.
+      - name: pytest
+        working-directory: apps/api
+        env:
+          LLM_ENGINE: deterministic
+          MCP_TRANSPORT: inmemory
+          APPROVAL_TOKEN: ci-test-token
+          LOG_LEVEL: WARNING
+        run: .venv/bin/python -m pytest tests/ -q
+
+  web:
+    name: Web — eslint · tsc · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: eslint
+        working-directory: apps/web
+        run: npm run lint
+
+      - name: tsc
+        working-directory: apps/web
+        run: npm run typecheck
+
+      - name: next build
+        working-directory: apps/web
+        run: npm run build
+
+  docker:
+    name: API container builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t alphabrief-api -f apps/api/Dockerfile apps/api
