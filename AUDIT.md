@@ -486,10 +486,12 @@ mailed a real inbox from the integration tests.
 
 ## Dependency posture
 
-`npm audit` reports 9 high-severity advisories. Every one is a **development-only**
-transitive dependency of `eslint-config-next`: `minimatch` → `brace-expansion`, a
-denial-of-service via unbounded brace expansion. None reach the shipped
-application, and the linter only ever processes this repository's own files.
+`npm audit` reports 9 high-severity advisories. Every one is **development-only**
+and traces to a single root: `minimatch@3` → `brace-expansion`, a denial-of-service
+via unbounded brace expansion. `eslint` itself is inside the advisory range, so
+this is not something plugin surgery can remove — dropping `eslint-config-next`
+entirely would still leave it. None of it reaches the shipped application, and the
+linter only ever processes this repository's own files.
 
 They are not silenced, because both available "fixes" are worse than the finding:
 
@@ -508,6 +510,8 @@ What *was* fixed, because those two were genuinely reachable:
 | `postcss` 8.4.31 nested inside `next` | overridden to 8.5.25 | XSS via unescaped `</style>`, plus two source-map path-traversal advisories |
 | `sharp` < 0.35.0 | overridden to 0.35.3 | four libvips CVEs in the image pipeline |
 | `framer-motion` 5.6 MB | removed | dead weight — zero imports since the console was rebuilt |
+| `@eslint/eslintrc` | removed | dead once the config stopped using `FlatCompat` |
+| install scripts implicitly trusted | `allowScripts`, version-pinned | `unrs-resolver` and `@tybys/wasm-util` are now approved explicitly, so a version bump forces a fresh review |
 
 That took the count from 12 to 9 and removed both advisories with any runtime
 reach. One `npm warn ERESOLVE` also remains in CI logs: an *optional* wasm
