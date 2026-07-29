@@ -34,6 +34,10 @@ absent on failures). All three sat in code that passed every gate for the entire
 build — they were reachable only with real infrastructure attached, which is
 exactly why they are written up here rather than quietly patched.
 
+Publishing the repository then exposed **R-4**: two tests asserted a hardcoded
+token instead of the configured one, so the suite passed locally and failed in CI.
+Fixed and verified under CI's exact environment.
+
 ---
 
 ## (a) Zero-warning quality gates
@@ -442,6 +446,41 @@ reviewer approved instantly or overnight.
 
 Pinned by five tests, including one that approves after a simulated ten-minute
 delay and asserts the recorded figure did not move.
+
+---
+
+## R-4 — the suite was not hermetic, and CI proved it (LOW, fixed)
+
+The first CI run on the public repository failed. Two authentication tests
+hardcoded `Authorization: Bearer test-approval-token`, matching the value
+`tests/conftest.py` installs via `setdefault`. But the workflow exports
+`APPROVAL_TOKEN: ci-test-token`, and an environment variable takes precedence over
+`setdefault` — so the application checked against one token while the test sent
+another, and every authenticated request came back `401`.
+
+The tests were asserting a constant rather than the behaviour. `approval_headers`
+now derives the header from `get_settings().approval_token` — the same value the
+application checks — so the suite is correct under any environment.
+
+Verified by running the suite twice locally: once with the default token, and once
+under CI's exact environment (`APPROVAL_TOKEN=ci-test-token`). Both pass. Fixing
+this blind and pushing would have been guessing.
+
+### Test isolation confirmed while here
+
+Because `Settings` reads `../../.env`, and that file now holds live Gmail and Neon
+credentials, it was worth proving the suite cannot reach production:
+
+```
+test DATABASE_URL : sqlite:////var/folders/.../app.db
+is neon           : False
+smtp_enabled      : False
+```
+
+`conftest` installs a temporary SQLite path and blanks `SMTP_*`, both as
+environment variables so they beat the dotenv file. Without that, `make test`
+would have written 190 tests' worth of runs into the production database and
+mailed a real inbox from the integration tests.
 
 ---
 

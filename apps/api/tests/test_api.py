@@ -9,6 +9,7 @@ import pytest
 from asgi_lifespan import LifespanManager
 
 from app.core.middleware import SECURITY_HEADERS
+from app.core.settings import get_settings
 from app.main import create_app
 
 
@@ -19,6 +20,19 @@ async def client() -> AsyncIterator[httpx.AsyncClient]:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
             yield http
+
+
+@pytest.fixture
+def approval_headers() -> dict[str, str]:
+    """A valid bearer header, read from the settings the app checks against.
+
+    Hardcoding the token made these tests pass locally and fail in CI, where the
+    workflow supplies a different `APPROVAL_TOKEN` — an environment variable
+    beats conftest's `setdefault`, so the app and the test disagreed and every
+    authenticated request came back 401. Deriving it keeps the suite hermetic
+    wherever it runs.
+    """
+    return {"Authorization": f"Bearer {get_settings().approval_token}"}
 
 
 class TestHealthAndDiscovery:
@@ -120,20 +134,24 @@ class TestApprovalAuth:
         )
         assert response.status_code == 401
 
-    async def test_correct_token_reaches_the_handler(self, client: httpx.AsyncClient) -> None:
+    async def test_correct_token_reaches_the_handler(
+        self, client: httpx.AsyncClient, approval_headers: dict[str, str]
+    ) -> None:
         response = await client.post(
             "/v1/runs/run_missing/decision",
             json={"action": "approve"},
-            headers={"Authorization": "Bearer test-approval-token"},
+            headers=approval_headers,
         )
         # Authenticated, so we get past auth and fail on the unknown run instead.
         assert response.status_code == 404
 
-    async def test_unknown_action_is_refused(self, client: httpx.AsyncClient) -> None:
+    async def test_unknown_action_is_refused(
+        self, client: httpx.AsyncClient, approval_headers: dict[str, str]
+    ) -> None:
         response = await client.post(
             "/v1/runs/run_missing/decision",
             json={"action": "delete_everything"},
-            headers={"Authorization": "Bearer test-approval-token"},
+            headers=approval_headers,
         )
         assert response.status_code == 422
 
