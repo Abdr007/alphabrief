@@ -1,0 +1,8 @@
+title: AlphaBrief
+emoji: 🛰️
+colorFrom: indigo
+colorTo: gray
+sdk: docker
+app_port: 7860
+pinned: false
+short_description: "Research agents that cannot make a number up"

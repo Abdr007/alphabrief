@@ -75,11 +75,19 @@ diagram: ## Print the mermaid graph, generated from the real StateGraph
 # ------------------------------------------------------------------ infra ---
 .PHONY: docker
 docker: ## Build the API container
-	docker build -t alphabrief-api -f apps/api/Dockerfile apps/api
+	docker build -t alphabrief-api -f apps/api/Dockerfile .
 
 .PHONY: docker-run
 docker-run: ## Run the API container, published on :7877
 	docker run --rm -p 7877:7860 --env-file .env alphabrief-api
+
+.PHONY: space-check
+space-check: ## Pre-flight the Hugging Face Space deploy (no credentials needed)
+	$(PY) scripts/deploy_space.py --check
+
+.PHONY: deploy-space
+deploy-space: ## Create/redeploy the API as a public Hugging Face Docker Space
+	$(PY) scripts/deploy_space.py --space alphabrief --public
 
 .PHONY: clean
 clean: ## Remove caches and local databases

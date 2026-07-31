@@ -1,0 +1,21 @@
+# The build context is the repository root, so everything that is not the API
+# package is dead weight in the image layer and a cache-buster on every web edit.
+apps/web
+.git
+.github
+.venv
+**/.venv
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+eval
+infra
+var
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example

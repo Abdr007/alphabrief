@@ -244,7 +244,7 @@ gcloud services enable run.googleapis.com artifactregistry.googleapis.com secret
 gcloud artifacts repositories create alphabrief-api-images --repository-format=docker --location=$REGION
 
 gcloud auth configure-docker $REGION-docker.pkg.dev
-docker build -t $REPO/api:v1 -f apps/api/Dockerfile apps/api
+docker build -t $REPO/api:v1 -f apps/api/Dockerfile .
 docker push $REPO/api:v1
 
 gcloud run deploy alphabrief-api \

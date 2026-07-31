@@ -49,3 +49,8 @@ next-env.d.ts
 .idea/
 .vscode/
 *.swp
+
+# --- generated ---------------------------------------------------------------
+# Written onto the Space deploy commit only (scripts/deploy_space.py); the
+# canonical copy is apps/api/Dockerfile and this must never land on a GitHub commit.
+/Dockerfile

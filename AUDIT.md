@@ -246,7 +246,7 @@ providers — a blended average would flatter the system.
 ### Container verified, not just written
 
 ```
-$ docker build -t alphabrief-api -f apps/api/Dockerfile apps/api
+$ docker build -t alphabrief-api -f apps/api/Dockerfile .
 Successfully tagged alphabrief-api:latest        (741 MB)
 
 $ docker run -d -p 7893:7860 alphabrief-api

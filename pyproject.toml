@@ -66,6 +66,9 @@ max-complexity = 18
 "apps/api/tests/*" = ["S101", "ARG001", "ARG002", "S105", "S106", "PLR2004", "PLC0415"]
 "eval/*" = ["T20", "S101", "PLC0415"]
 "apps/api/app/mcp_server/__main__.py" = ["T20"]
+# Operator-facing CLIs: printing IS the interface, and a deploy that fails
+# silently because a lint rule forbade explaining why is worse than the lint.
+"scripts/*.py" = ["T20"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
@@ -81,7 +84,7 @@ docstring-code-format = true
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "apps/api"
-files = ["apps/api/app", "apps/api/tests", "eval"]
+files = ["apps/api/app", "apps/api/tests", "eval", "scripts"]
 strict = true
 warn_unused_configs = true
 warn_redundant_casts = true

@@ -37,6 +37,8 @@ dev = [
     "pytest-cov>=6.0.0",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
+    # Deploying the API to a Hugging Face Space (scripts/deploy_space.py).
+    "huggingface-hub>=0.26.0",
 ]
 
 [build-system]

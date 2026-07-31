@@ -6,7 +6,13 @@
 # container on Cloud Run's always-free allowance, or a Hugging Face Docker Space
 # on port 7860 with no card at all.
 #
-#   docker build -t alphabrief-api -f apps/api/Dockerfile apps/api
+# Built from the REPOSITORY ROOT, not from apps/api. Hugging Face Spaces builds
+# `./Dockerfile` with the repository as its context and offers no way to point it
+# elsewhere, so the paths below are root-relative and `make docker` uses the same
+# context. One Dockerfile, built identically everywhere — a second, host-specific
+# copy would drift, and it would drift silently until a deploy failed.
+#
+#   docker build -t alphabrief-api -f apps/api/Dockerfile .
 #   docker run --rm -p 7860:7860 --env-file .env alphabrief-api
 
 FROM python:3.12-slim-bookworm AS base
@@ -24,8 +30,8 @@ RUN apt-get update \
 # ---------------------------------------------------------------- deps ------
 FROM base AS deps
 WORKDIR /build
-COPY pyproject.toml README.md ./
-COPY app ./app
+COPY apps/api/pyproject.toml apps/api/README.md ./
+COPY apps/api/app ./app
 # --root-user-action=ignore: this is a throwaway build stage, so installing as
 # root is correct here and pip's "use a virtualenv" advice does not apply. The
 # flag silences the warning instead of leaving it in every build log.
@@ -43,8 +49,8 @@ COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.
 COPY --from=deps /usr/local/bin /usr/local/bin
 
 WORKDIR /home/alphabrief/app
-COPY --chown=alphabrief:alphabrief pyproject.toml README.md ./
-COPY --chown=alphabrief:alphabrief app ./app
+COPY --chown=alphabrief:alphabrief apps/api/pyproject.toml apps/api/README.md ./
+COPY --chown=alphabrief:alphabrief apps/api/app ./app
 
 USER alphabrief
 
