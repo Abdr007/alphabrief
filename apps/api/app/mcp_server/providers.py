@@ -18,6 +18,7 @@ import asyncio
 import logging
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
@@ -63,6 +64,10 @@ class ProviderContext:
     """Per-run cache and polite rate limiter shared by all tools in one server."""
 
     min_interval_seconds: float = 0.20
+    #: Attempts per provider call, including the first.
+    max_attempts: int = 3
+    #: Base delay before the second attempt; doubled for each one after.
+    retry_backoff_seconds: float = 0.75
     _cache: dict[str, Any] = field(default_factory=dict)
     _last_call: float = 0.0
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -91,6 +96,51 @@ class ProviderContext:
 
     def stats(self) -> dict[str, int]:
         return {"cache_hits": self.hits, "cache_misses": self.misses, "entries": len(self._cache)}
+
+
+async def call_provider[T](
+    ctx: ProviderContext,
+    func: Callable[..., T],
+    *args: Any,
+    label: str,
+) -> T:
+    """Run a blocking provider call in a thread, retrying transient failures.
+
+    Every exception that reaches here is transient by construction: yfinance is
+    called with ``raise_errors=False``, so an unknown or delisted ticker comes
+    back as an empty frame rather than an exception. What does raise is
+    transport — and, from a shared egress IP, Yahoo's rate limiter.
+
+    That last case is why this exists. Yahoo answered the *first* call from a
+    cold session with ``YFRateLimitError`` and then served every call after it,
+    so a single attempt lost the first ticker of every run on the deployed
+    Space, every time. The brief was correct about it — it reported partial
+    coverage and named the gap — but a demo that is honestly broken is still
+    broken.
+
+    Retries are bounded and the delay is throttled like any other call, so this
+    stays polite to a free provider rather than hammering it.
+    """
+    attempts = max(1, ctx.max_attempts)
+    for attempt in range(attempts):
+        await ctx.throttle()
+        try:
+            return await asyncio.to_thread(func, *args)
+        except Exception as exc:
+            if attempt + 1 >= attempts:
+                raise
+            delay = ctx.retry_backoff_seconds * (2**attempt)
+            logger.info(
+                "%s failed (%s); retrying in %.2fs [%d/%d]",
+                label,
+                type(exc).__name__,
+                delay,
+                attempt + 1,
+                attempts,
+            )
+            await asyncio.sleep(delay)
+    # Unreachable: the loop either returns or raises on its final attempt.
+    raise RuntimeError(f"{label}: retry loop exited without a result")
 
 
 # --------------------------------------------------------------------------- #
@@ -150,9 +200,10 @@ async def fetch_price_history(ctx: ProviderContext, ticker: str, days: int) -> P
     if isinstance(cached, PriceHistory):
         return cached
 
-    await ctx.throttle()
     try:
-        bars = await asyncio.to_thread(_fetch_history_blocking, symbol, window)
+        bars = await call_provider(
+            ctx, _fetch_history_blocking, symbol, window, label=f"price history {symbol}"
+        )
     except Exception as exc:  # noqa: BLE001 - degrade, never crash the run
         logger.warning("price history failed for %s: %s", symbol, exc)
         result = PriceHistory(
@@ -223,9 +274,10 @@ async def fetch_fundamentals(ctx: ProviderContext, ticker: str) -> Fundamentals:
     if isinstance(cached, Fundamentals):
         return cached
 
-    await ctx.throttle()
     try:
-        info = await asyncio.to_thread(_fetch_fundamentals_blocking, symbol)
+        info = await call_provider(
+            ctx, _fetch_fundamentals_blocking, symbol, label=f"fundamentals {symbol}"
+        )
     except Exception as exc:  # noqa: BLE001 - degrade, never crash the run
         logger.warning("fundamentals failed for %s: %s", symbol, exc)
         result = Fundamentals(

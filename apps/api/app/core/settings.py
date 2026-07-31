@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     news_limit: int = 6
     #: Polite delay between outbound provider calls, per MCP server process.
     provider_min_interval_seconds: float = 0.20
+    #: Attempts per provider call, including the first. Yahoo answers the first
+    #: call from a cold session on a shared egress IP with a rate-limit error and
+    #: then serves everything after it, so one attempt loses the first ticker of
+    #: every run on a hosted deployment.
+    provider_max_attempts: int = 3
+    provider_retry_backoff_seconds: float = 0.75
 
     # ------------------------------------------------------------ persistence ---
     database_url: str = "sqlite:///./alphabrief.db"

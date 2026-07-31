@@ -59,7 +59,11 @@ def shared_inmemory_server(settings: Settings) -> Any:
     global _shared_server  # noqa: PLW0603 - deliberate process-wide singleton
     if _shared_server is None:
         _shared_server = build_server(
-            ProviderContext(min_interval_seconds=settings.provider_min_interval_seconds)
+            ProviderContext(
+                min_interval_seconds=settings.provider_min_interval_seconds,
+                max_attempts=settings.provider_max_attempts,
+                retry_backoff_seconds=settings.provider_retry_backoff_seconds,
+            )
         )
     return _shared_server
 

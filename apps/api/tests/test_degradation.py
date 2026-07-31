@@ -21,6 +21,7 @@ from app.graph.compose import compose_brief
 from app.graph.verify import verify_brief
 from app.mcp_server.providers import (
     ProviderContext,
+    call_provider,
     fetch_fundamentals,
     fetch_price_history,
     fetch_rss_news,
@@ -99,7 +100,7 @@ class TestDeadNetwork:
         monkeypatch.delenv("NO_PROXY", raising=False)
         monkeypatch.delenv("no_proxy", raising=False)
 
-        ctx = ProviderContext(min_interval_seconds=0.0)
+        ctx = ProviderContext(min_interval_seconds=0.0, max_attempts=1)
         history = await fetch_price_history(ctx, "AAPL", 30)
 
         assert not history.ok
@@ -112,7 +113,7 @@ class TestDeadNetwork:
         monkeypatch.delenv("NO_PROXY", raising=False)
         monkeypatch.delenv("no_proxy", raising=False)
 
-        ctx = ProviderContext(min_interval_seconds=0.0)
+        ctx = ProviderContext(min_interval_seconds=0.0, max_attempts=1)
         feed = await fetch_rss_news(ctx, "AAPL", 5)
 
         assert feed.items == []
@@ -127,7 +128,7 @@ class TestDeadNetwork:
         monkeypatch.delenv("NO_PROXY", raising=False)
         monkeypatch.delenv("no_proxy", raising=False)
 
-        ctx = ProviderContext(min_interval_seconds=0.0)
+        ctx = ProviderContext(min_interval_seconds=0.0, max_attempts=1)
         fundamentals = await fetch_fundamentals(ctx, "AAPL")
 
         assert not fundamentals.ok
@@ -140,7 +141,7 @@ class TestDeadNetwork:
         for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"):
             monkeypatch.setenv(var, DEAD_PROXY)
 
-        ctx = ProviderContext(min_interval_seconds=0.0)
+        ctx = ProviderContext(min_interval_seconds=0.0, max_attempts=1)
         history = await fetch_price_history(ctx, "AAPL", 30)
         metrics = compute_metrics_from_bars("AAPL", list(history.bars), None)
 
@@ -210,3 +211,66 @@ class TestEmptyRss:
 
         report = verify_brief(brief, state)  # type: ignore[arg-type]
         assert report.ok, report.failures
+
+
+class TestTransientProviderFailuresAreRetried:
+    """A cold session's first call is answered with a rate-limit error.
+
+    Found on the deployed Space, not locally: Yahoo rate-limited the *first*
+    outbound call from the container's shared egress IP and then served every
+    call after it, so the first ticker of every hosted run came back empty. The
+    brief reported it honestly as partial coverage — which is the degradation
+    path working — but the run was still missing half its data every time.
+    """
+
+    async def test_a_call_that_fails_once_then_succeeds_returns_the_result(self) -> None:
+        ctx = ProviderContext(min_interval_seconds=0.0, retry_backoff_seconds=0.0)
+        attempts = {"n": 0}
+
+        def flaky() -> str:
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise RuntimeError("YFRateLimitError")
+            return "bars"
+
+        result = await call_provider(ctx, flaky, label="flaky")
+
+        assert result == "bars"
+        assert attempts["n"] == 2
+
+    async def test_it_gives_up_after_the_configured_attempts(self) -> None:
+        """Bounded: a genuinely dead provider must not stall the run indefinitely."""
+        ctx = ProviderContext(min_interval_seconds=0.0, retry_backoff_seconds=0.0, max_attempts=3)
+        attempts = {"n": 0}
+
+        def always_fails() -> str:
+            attempts["n"] += 1
+            raise RuntimeError("down")
+
+        with pytest.raises(RuntimeError, match="down"):
+            await call_provider(ctx, always_fails, label="dead")
+
+        assert attempts["n"] == 3
+
+    async def test_a_single_attempt_never_retries(self) -> None:
+        ctx = ProviderContext(min_interval_seconds=0.0, retry_backoff_seconds=0.0, max_attempts=1)
+        attempts = {"n": 0}
+
+        def always_fails() -> str:
+            attempts["n"] += 1
+            raise RuntimeError("down")
+
+        with pytest.raises(RuntimeError):
+            await call_provider(ctx, always_fails, label="dead")
+
+        assert attempts["n"] == 1
+
+    async def test_the_original_error_survives_the_retries(self) -> None:
+        """The tool reports `type(exc).__name__`, so the last exception must be the real one."""
+        ctx = ProviderContext(min_interval_seconds=0.0, retry_backoff_seconds=0.0, max_attempts=2)
+
+        def always_fails() -> str:
+            raise TimeoutError("upstream timed out")
+
+        with pytest.raises(TimeoutError, match="upstream timed out"):
+            await call_provider(ctx, always_fails, label="slow")
