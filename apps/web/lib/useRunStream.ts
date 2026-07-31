@@ -3,7 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { phaseFromEvents } from "@/lib/format";
-import type { ClaimCheck, EventKind, GatePayload, Phase, TelemetryEvent } from "@/lib/types";
+import type {
+  ClaimCheck,
+  EventKind,
+  GatePayload,
+  Phase,
+  QuoteCheck,
+  TelemetryEvent,
+} from "@/lib/types";
 
 /** Every named SSE event the API can emit; EventSource needs explicit listeners. */
 const EVENT_KINDS: EventKind[] = [
@@ -39,6 +46,7 @@ export interface RunStreamState {
   live: boolean;
   completeness: Record<string, number>;
   claims: ClaimCheck[];
+  quotes: QuoteCheck[];
   verification: TelemetryEvent | null;
   gate: GatePayload | null;
   status: string | null;
@@ -174,9 +182,30 @@ export function useRunStream(): RunStreamApi {
       }
     }
 
-    const claims = events
-      .filter((event) => event.kind === "verify.claim")
-      .map((event) => event.payload as unknown as ClaimCheck);
+    // `verify.claim` carries two different shapes: a numeric ClaimCheck, and a
+    // QuoteCheck for a headline the writer quoted — which has no claim_id,
+    // claimed value or tolerance. They are separated here rather than at the
+    // render site so no consumer can mistake one for the other.
+    const verifications = events.filter((event) => event.kind === "verify.claim");
+    // A mismatch costs the writer one regeneration, and verification then runs
+    // again over the same claim ids. Keeping the last report per id shows the
+    // final state; keeping them all would double every row and contradict the
+    // summary count.
+    const latestClaims = new Map<string, ClaimCheck>();
+    for (const event of verifications) {
+      const id = event.payload.claim_id;
+      if (typeof id === "string") {
+        latestClaims.set(id, event.payload as unknown as ClaimCheck);
+      }
+    }
+    const claims = [...latestClaims.values()];
+    const latestQuotes = new Map<string, QuoteCheck>();
+    for (const event of verifications) {
+      if (typeof event.payload.claim_id === "string") continue;
+      const quote = event.payload as unknown as QuoteCheck;
+      latestQuotes.set(`${quote.ticker}:${quote.field}`, quote);
+    }
+    const quotes = [...latestQuotes.values()];
 
     const verification =
       events.filter((event) => event.kind === "verify.completed").slice(-1)[0] ?? null;
@@ -185,6 +214,7 @@ export function useRunStream(): RunStreamApi {
       phase: phaseFromEvents(kinds, status),
       completeness,
       claims,
+      quotes,
       verification,
       iterations,
       toolCallCount: kinds.filter((kind) => kind === "mcp.tool_call").length,

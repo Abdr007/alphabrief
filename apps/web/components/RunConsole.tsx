@@ -5,16 +5,25 @@ import { useCallback, useMemo, useState } from "react";
 import { ApprovalGate } from "@/components/ApprovalGate";
 import { BriefView } from "@/components/BriefView";
 import { CompletenessRail } from "@/components/CompletenessRail";
+import { OrchestrationField } from "@/components/OrchestrationField";
 import { TelemetryFeed } from "@/components/TelemetryFeed";
-import { VerificationPanel } from "@/components/VerificationPanel";
-import { PHASE_LABEL, PHASE_SEQUENCE } from "@/lib/format";
+import { VerificationLattice } from "@/components/VerificationLattice";
+import { PHASE_LABEL } from "@/lib/format";
 import { useRunStream } from "@/lib/useRunStream";
-import type { CreateRunResponse, Phase, RunMode } from "@/lib/types";
+import type { CreateRunResponse, RunMode } from "@/lib/types";
 
-const MODES: { id: RunMode; code: string; hint: string }[] = [
-  { id: "standard", code: "STD", hint: "normal governed run" },
-  { id: "demo_fault", code: "FLT", hint: "injects a dead ticker — graceful degradation" },
-  { id: "demo_mismatch", code: "MSM", hint: "corrupts a figure — the verifier goes red" },
+const MODES: { id: RunMode; label: string; hint: string }[] = [
+  { id: "standard", label: "Standard", hint: "A normal governed run." },
+  {
+    id: "demo_fault",
+    label: "Break a source",
+    hint: "Injects a symbol no provider can answer, so you can watch it degrade instead of fail.",
+  },
+  {
+    id: "demo_mismatch",
+    label: "Corrupt a figure",
+    hint: "Tampers with one number after it is written. The recompute catches it and the gate turns red.",
+  },
 ];
 
 export function RunConsole({ defaultWatchlist }: { defaultWatchlist: string[] }) {
@@ -23,6 +32,8 @@ export function RunConsole({ defaultWatchlist }: { defaultWatchlist: string[] })
   const [mode, setMode] = useState<RunMode>("standard");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Shared between the document and the lattice, so a figure and its proof light up together. */
+  const [activeClaim, setActiveClaim] = useState<string | null>(null);
 
   const tickers = useMemo(
     () =>
@@ -51,7 +62,7 @@ export function RunConsole({ defaultWatchlist }: { defaultWatchlist: string[] })
 
   const launch = useCallback(async () => {
     if (tickers.length === 0) {
-      setError("At least one symbol is required.");
+      setError("Enter at least one symbol.");
       return;
     }
     setStarting(true);
@@ -64,12 +75,12 @@ export function RunConsole({ defaultWatchlist }: { defaultWatchlist: string[] })
       });
       const payload = (await response.json()) as CreateRunResponse & { detail?: string };
       if (!response.ok) {
-        setError(payload.detail ?? "Could not start the run.");
+        setError(payload.detail ?? "The run could not be started.");
         return;
       }
       stream.start(payload.run_id);
     } catch {
-      setError("Network error while starting the run.");
+      setError("Could not reach the console API.");
     } finally {
       setStarting(false);
     }
@@ -79,19 +90,17 @@ export function RunConsole({ defaultWatchlist }: { defaultWatchlist: string[] })
 
   return (
     <div className="space-y-4">
-      {/* ── pipeline rail ─────────────────────────────────────────────── */}
-      <PipelineRail phase={stream.phase} runId={stream.runId} />
+      <OrchestrationField events={stream.events} runId={stream.runId} />
 
-      {/* ── launch bay + telemetry ────────────────────────────────────── */}
-      <section className="grid gap-4 lg:grid-cols-[minmax(0,330px)_minmax(0,1fr)]">
-        <div className="panel ticked flex flex-col">
-          <header className="rule-b px-3 py-2">
+      <section className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
+        <div className="panel flex flex-col">
+          <header className="border-b border-edge px-4 py-2.5">
             <span className="hdr">
               <span>Watchlist</span>
             </span>
           </header>
 
-          <div className="flex flex-1 flex-col gap-4 px-3 py-3">
+          <div className="flex flex-1 flex-col gap-5 px-4 py-4">
             <div>
               <textarea
                 value={raw}
@@ -100,82 +109,69 @@ export function RunConsole({ defaultWatchlist }: { defaultWatchlist: string[] })
                 spellCheck={false}
                 disabled={running}
                 aria-label="Watchlist symbols"
-                className="w-full resize-none border border-rule bg-black px-2.5 py-2 text-[13px] uppercase tracking-[0.08em] text-amber outline-none transition focus:border-amber-dim disabled:opacity-50"
+                className="w-full resize-none rounded-[2px] border border-edge bg-void px-3 py-2.5 text-[13px] uppercase tracking-[0.08em] text-ink outline-none transition focus:border-violet-dim disabled:opacity-50"
               />
-              <div className="mt-1.5 flex flex-wrap gap-1">
+              <div className="mt-2 flex flex-wrap gap-1">
                 {tickers.map((ticker) => (
                   <span
                     key={ticker}
-                    className="border border-rule px-1.5 py-0.5 text-[10px] text-muted"
+                    className="rounded-[2px] border border-edge px-1.5 py-0.5 text-[10px] text-muted"
                   >
-                    ▸{ticker}
+                    {ticker}
                   </span>
                 ))}
               </div>
             </div>
 
             <div>
-              <span className="label">mode</span>
-              <div className="mt-1.5 grid grid-cols-3 gap-1">
+              <span className="eyebrow">Mode</span>
+              <div className="mt-2 flex flex-col gap-1">
                 {MODES.map((option) => (
                   <button
                     key={option.id}
                     type="button"
-                    title={option.hint}
                     disabled={running}
                     onClick={() => setMode(option.id)}
-                    className={`border py-1.5 text-[11px] tracking-[0.14em] transition disabled:opacity-50 ${
+                    className={`btn px-3 py-2 text-left !normal-case !tracking-normal disabled:opacity-50 ${
                       mode === option.id
-                        ? "border-amber-dim bg-amber/12 text-amber"
-                        : "border-rule text-faint hover:border-rule-hot hover:text-ink"
+                        ? "border-violet-dim bg-violet-wash !text-violet"
+                        : "hover:border-edge-hot hover:!text-ink"
                     }`}
                   >
-                    {option.code}
+                    {option.label}
                   </button>
                 ))}
               </div>
-              <p className="mt-1.5 text-[10px] leading-relaxed text-faint">
+              <p className="mt-2 text-[10px] leading-relaxed text-faint">
                 {MODES.find((option) => option.id === mode)?.hint}
               </p>
             </div>
 
-            {/* the key */}
             <button
               type="button"
               onClick={launch}
               disabled={running}
-              className={`relative mt-auto h-[72px] w-full border text-[17px] tracking-[0.42em] transition ${
-                running
-                  ? "border-rule-hot bg-raised text-faint"
-                  : "key-live border-amber-dim bg-amber/8 text-amber hover:bg-amber/16"
-              }`}
+              className="mt-auto w-full rounded-[2px] border border-violet bg-violet/20 py-4 text-[13px] uppercase tracking-[0.3em] text-live transition hover:bg-violet/32 disabled:border-edge disabled:bg-transparent disabled:text-faint"
             >
-              {running ? (
-                <>
-                  <span className="inline-block h-3 w-[8px] bg-amber-dim align-middle blink" />
-                  <span className="ml-3">BUSY</span>
-                </>
-              ) : (
-                <span className="glow-amber">RUN</span>
-              )}
+              {running ? PHASE_LABEL[stream.phase] : "Run"}
             </button>
 
             {error ? (
-              <p className="border border-alert-dim bg-alert/10 px-2.5 py-1.5 text-[11px] text-alert">
+              <p className="rounded-[2px] border border-coral-dim bg-coral/10 px-3 py-2 text-[11px] text-coral">
                 {error}
               </p>
             ) : null}
             {stream.error ? (
-              <p className="border border-rule px-2.5 py-1.5 text-[11px] text-muted">
+              <p className="rounded-[2px] border border-edge px-3 py-2 text-[11px] text-muted">
                 {stream.error}
               </p>
             ) : null}
 
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-rule pt-3 text-[11px]">
-              <Readout label="phase" value={PHASE_LABEL[stream.phase]} tone="amber" />
-              <Readout label="iter" value={String(stream.iterations)} />
-              <Readout label="mcp calls" value={String(stream.toolCallCount)} />
-              <Readout label="model calls" value={String(stream.modelCallCount)} />
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5 border-t border-edge pt-4 text-[11px]">
+              <Readout label="Stage" value={PHASE_LABEL[stream.phase]} lit />
+              <Readout label="Supervisor rounds" value={String(stream.iterations)} />
+              <Readout label="Tool calls" value={String(stream.toolCallCount)} />
+              <Readout label="Model calls" value={String(stream.modelCallCount)} />
             </dl>
           </div>
         </div>
@@ -187,8 +183,14 @@ export function RunConsole({ defaultWatchlist }: { defaultWatchlist: string[] })
         <CompletenessRail tickers={tickers} completeness={stream.completeness} />
       ) : null}
 
-      {stream.claims.length > 0 || verificationSummary ? (
-        <VerificationPanel claims={stream.claims} summary={verificationSummary} />
+      {stream.claims.length > 0 || stream.quotes.length > 0 || verificationSummary ? (
+        <VerificationLattice
+          claims={stream.claims}
+          quotes={stream.quotes}
+          summary={verificationSummary}
+          activeClaim={activeClaim}
+          onActiveClaim={setActiveClaim}
+        />
       ) : null}
 
       {stream.gate &&
@@ -204,80 +206,34 @@ export function RunConsole({ defaultWatchlist }: { defaultWatchlist: string[] })
 
       {stream.status === "DELIVERED" || stream.status === "REJECTED" ? (
         <p
-          className={`border px-3 py-2 text-[11.5px] ${
+          className={`rounded-[2px] border px-4 py-2.5 text-[11.5px] ${
             stream.status === "DELIVERED"
-              ? "border-phosphor-dim bg-phosphor/8 text-phosphor"
-              : "border-alert-dim bg-alert/8 text-alert"
+              ? "border-violet-dim bg-violet-wash text-violet"
+              : "border-coral-dim bg-coral/8 text-coral"
           }`}
         >
           {stream.status === "DELIVERED"
-            ? "◆ APPROVED — brief emailed and archived with its verification report attached."
-            : "✕ REJECTED — nothing delivered. The run and its report remain in the archive."}
+            ? "Approved. The brief was sent and archived with its verification report."
+            : "Rejected. Nothing was sent; the run and its report stay in the archive."}
         </p>
       ) : null}
 
-      {stream.gate?.brief ? <BriefView brief={stream.gate.brief} /> : null}
+      {stream.gate?.brief ? (
+        <BriefView
+          brief={stream.gate.brief}
+          activeClaim={activeClaim}
+          onActiveClaim={setActiveClaim}
+        />
+      ) : null}
     </div>
   );
 }
 
-/** Horizontal pipeline rail — shows exactly where the graph is. */
-function PipelineRail({ phase, runId }: { phase: Phase; runId: string | null }) {
-  const activeIndex = PHASE_SEQUENCE.indexOf(phase);
-  const terminal = phase === "delivered" || phase === "rejected" || phase === "failed";
-
-  return (
-    <section className="panel flex flex-wrap items-center gap-x-1 gap-y-2 px-3 py-2">
-      {PHASE_SEQUENCE.map((step, index) => {
-        const done = terminal || (activeIndex >= 0 && index < activeIndex);
-        const active = index === activeIndex && !terminal;
-        return (
-          <span key={step} className="flex items-center">
-            <span
-              className={`border px-2 py-1 text-[10px] uppercase tracking-[0.14em] ${
-                active
-                  ? "border-amber-dim bg-amber/12 text-amber"
-                  : done
-                    ? "border-phosphor-dim text-phosphor"
-                    : "border-rule text-faint"
-              }`}
-            >
-              {done && !active ? "✓ " : null}
-              {PHASE_LABEL[step]}
-            </span>
-            {index < PHASE_SEQUENCE.length - 1 ? (
-              <span className={`px-1 ${done ? "text-phosphor-dim" : "text-rule-hot"}`}>──</span>
-            ) : null}
-          </span>
-        );
-      })}
-      <span className="ml-auto text-[10px] uppercase tracking-[0.14em] text-faint">
-        {runId ? (
-          <>
-            run<span className="mx-1 text-rule-hot">:</span>
-            <span className="text-muted">{runId.replace("run_", "").slice(0, 10)}</span>
-          </>
-        ) : (
-          "no active run"
-        )}
-      </span>
-    </section>
-  );
-}
-
-function Readout({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone?: "amber";
-}) {
+function Readout({ label, value, lit }: { label: string; value: string; lit?: boolean }) {
   return (
     <div>
-      <dt className="label">{label}</dt>
-      <dd className={`mt-0.5 ${tone === "amber" ? "text-amber" : "text-ink"}`}>{value}</dd>
+      <dt className="eyebrow">{label}</dt>
+      <dd className={`mt-1 ${lit ? "text-live" : "text-ink"}`}>{value}</dd>
     </div>
   );
 }

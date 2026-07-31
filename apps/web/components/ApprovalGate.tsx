@@ -7,8 +7,11 @@ import type { GatePayload } from "@/lib/types";
 type Action = "approve" | "reject" | "edit";
 
 /**
- * The human gate. The graph is suspended at a checkpointed LangGraph interrupt;
- * these three keys are the only thing that resumes it.
+ * The seam between the machine and the document.
+ *
+ * The graph is genuinely suspended here, at a checkpointed LangGraph interrupt
+ * — not waiting on a callback held in memory. That is why the decision is a
+ * separate authenticated request, and why it still works after a restart.
  */
 export function ApprovalGate({
   gate,
@@ -54,98 +57,102 @@ export function ApprovalGate({
 
   return (
     <section
-      className={`panel ticked border-2 ${verified ? "border-phosphor-dim" : "border-alert-dim"}`}
+      className={`panel-flush overflow-hidden border-2 ${
+        verified ? "border-violet-dim" : "border-coral-dim"
+      }`}
     >
       <header
-        className={`flex flex-wrap items-center gap-x-4 gap-y-2 rule-b px-3 py-2 ${
-          verified ? "bg-phosphor/6" : "bg-alert/8"
+        className={`flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-3 ${
+          verified ? "border-violet-dim bg-violet-wash" : "border-coral-dim bg-coral/8"
         }`}
       >
-        <span className="flex-1 text-[11px] uppercase tracking-[0.2em]">
-          <span className={verified ? "text-phosphor" : "text-alert"}>
-            {verified ? "◆ execution halted — sign-off required" : "▲ verification failed — review"}
-          </span>
-        </span>
+        <div className="flex-1">
+          <p
+            className={`display text-[15px] font-bold tracking-[-0.02em] ${
+              verified ? "text-violet" : "text-coral"
+            }`}
+          >
+            {verified ? "Paused for your signature" : "Held back — a figure did not reconcile"}
+          </p>
+        </div>
         <span
-          className={`border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${
-            verified
-              ? "border-phosphor-dim text-phosphor"
-              : "border-alert-dim text-alert"
+          className={`rounded-[2px] border px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${
+            verified ? "border-violet-dim text-violet" : "border-coral-dim text-coral"
           }`}
         >
-          {gate.verification.matched}/{gate.verification.checked_claims} verified
+          {gate.verification.matched}/{gate.verification.checked_claims} agreed
         </span>
       </header>
 
-      <div className="space-y-3 px-3 py-3">
-        <p className="text-[11.5px] leading-relaxed text-muted">
+      <div className="space-y-4 px-4 py-4">
+        <p className="max-w-3xl text-[11.5px] leading-relaxed text-muted">
           {verified
-            ? "Every figure reconciled against raw market data. The graph is paused at a checkpointed interrupt and cannot deliver without a decision."
-            : "One or more figures did not reconcile. The brief was regenerated once and still failed, so it is held here rather than delivered."}
+            ? "Every figure was recomputed from the raw bars and matched. Nothing is delivered until you decide."
+            : "A figure survived neither the first write nor the one permitted regeneration, so the brief is held here instead of being sent."}
         </p>
 
         {editing ? (
           <label className="block">
-            <span className="label">headline</span>
+            <span className="eyebrow">Headline</span>
             <textarea
               value={headline}
               onChange={(event) => setHeadline(event.target.value)}
               rows={2}
-              className="mt-1 w-full resize-none border border-rule bg-black px-2.5 py-2 text-[12px] text-ink outline-none focus:border-amber-dim"
+              className="mt-1.5 w-full resize-none rounded-[2px] border border-edge bg-void px-3 py-2 text-[12px] text-ink outline-none focus:border-violet-dim"
             />
             <span className="mt-1 block text-[10px] text-faint">
-              narrative only — a numeral typed here is rejected; figures stay verified claims
+              Narrative only. A numeral typed here is rejected — figures stay verified claims.
             </span>
           </label>
         ) : null}
 
         <label className="block">
-          <span className="label">reviewer note (optional)</span>
+          <span className="eyebrow">Note for the audit trail</span>
           <input
             value={note}
             onChange={(event) => setNote(event.target.value)}
             maxLength={1000}
-            placeholder="recorded in the approval audit trail"
-            className="mt-1 w-full border border-rule bg-black px-2.5 py-2 text-[12px] text-ink outline-none placeholder:text-faint focus:border-amber-dim"
+            placeholder="Optional — stored with the decision"
+            className="mt-1.5 w-full rounded-[2px] border border-edge bg-void px-3 py-2 text-[12px] text-ink outline-none placeholder:text-faint focus:border-violet-dim"
           />
         </label>
 
         {error ? (
-          <p className="border border-alert-dim bg-alert/10 px-2.5 py-1.5 text-[11px] text-alert">
+          <p className="rounded-[2px] border border-coral-dim bg-coral/10 px-3 py-2 text-[11px] text-coral">
             {error}
           </p>
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2">
           <Key
-            tone="phosphor"
+            tone="primary"
             busy={busy === "approve"}
             disabled={busy !== null}
             onClick={() => decide("approve")}
-            label="approve & deliver"
+            label="Approve and send"
           />
           {editing ? (
             <Key
-              tone="amber"
+              tone="neutral"
               busy={busy === "edit"}
               disabled={busy !== null}
               onClick={() => decide("edit")}
-              label="save edit & deliver"
+              label="Save edit and send"
             />
           ) : (
             <Key
               tone="neutral"
               disabled={busy !== null}
               onClick={() => setEditing(true)}
-              label="edit headline"
+              label="Edit headline"
             />
           )}
           <Key
-            tone="alert"
+            tone="danger"
             busy={busy === "reject"}
             disabled={busy !== null}
             onClick={() => decide("reject")}
-            label="reject"
+            label="Reject"
           />
         </div>
       </div>
@@ -161,25 +168,24 @@ function Key({
   busy,
 }: {
   label: string;
-  tone: "phosphor" | "amber" | "alert" | "neutral";
+  tone: "primary" | "danger" | "neutral";
   onClick: () => void;
   disabled?: boolean;
   busy?: boolean;
 }) {
   const tones = {
-    phosphor: "border-phosphor-dim text-phosphor hover:bg-phosphor/12",
-    amber: "border-amber-dim text-amber hover:bg-amber/12",
-    alert: "border-alert-dim text-alert hover:bg-alert/12",
-    neutral: "border-rule text-muted hover:border-rule-hot hover:text-ink",
+    primary: "border-violet !text-live bg-violet/20 hover:bg-violet/32",
+    danger: "border-coral-dim !text-coral hover:bg-coral/12",
+    neutral: "hover:border-edge-hot hover:!text-ink",
   } as const;
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`border px-3.5 py-2 text-[11px] uppercase tracking-[0.16em] transition disabled:opacity-40 ${tones[tone]}`}
+      className={`btn px-4 py-2.5 disabled:opacity-40 ${tones[tone]}`}
     >
-      {busy ? "…" : label}
+      {busy ? "Working…" : label}
     </button>
   );
 }

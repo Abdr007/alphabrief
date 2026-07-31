@@ -43,28 +43,34 @@ export function signOf(id: string | null, claims: Map<string, NumericClaim>): nu
   return claim ? Math.sign(claim.value) : 0;
 }
 
-/** Terminal channel codes — fixed width so the feed stays in columns. */
+/**
+ * Channel codes — fixed width so the feed stays in columns.
+ *
+ * Tone follows the one colour rule the whole surface uses: white is happening
+ * now, violet is settled or agreed, coral is a problem. Nothing is coloured
+ * merely to look busy.
+ */
 const KIND_STYLES: Record<string, { label: string; tone: string }> = {
-  "run.started": { label: "boot", tone: "text-amber" },
-  "supervisor.plan": { label: "supv", tone: "text-signal" },
-  "supervisor.route": { label: "rout", tone: "text-signal" },
-  "agent.dispatch": { label: "disp", tone: "text-signal" },
-  "agent.started": { label: "agnt", tone: "text-amber" },
-  "agent.completed": { label: "agnt", tone: "text-phosphor" },
-  "model.call": { label: "mdl", tone: "text-signal" },
-  "mcp.tool_call": { label: "mcp", tone: "text-amber" },
+  "run.started": { label: "boot", tone: "text-live" },
+  "supervisor.plan": { label: "supv", tone: "text-live" },
+  "supervisor.route": { label: "rout", tone: "text-muted" },
+  "agent.dispatch": { label: "disp", tone: "text-muted" },
+  "agent.started": { label: "agnt", tone: "text-live" },
+  "agent.completed": { label: "agnt", tone: "text-violet" },
+  "model.call": { label: "mdl", tone: "text-muted" },
+  "mcp.tool_call": { label: "mcp", tone: "text-live" },
   "state.progress": { label: "stat", tone: "text-faint" },
-  "writer.started": { label: "wrtr", tone: "text-signal" },
-  "writer.completed": { label: "wrtr", tone: "text-phosphor" },
-  "verify.started": { label: "vrfy", tone: "text-amber" },
-  "verify.claim": { label: "clm", tone: "text-phosphor" },
-  "verify.completed": { label: "vrfy", tone: "text-phosphor" },
-  "gate.awaiting": { label: "gate", tone: "text-amber" },
-  "gate.decision": { label: "gate", tone: "text-signal" },
-  "delivery.sent": { label: "dlvr", tone: "text-phosphor" },
-  "run.completed": { label: "done", tone: "text-phosphor" },
-  "run.failed": { label: "fail", tone: "text-alert" },
-  warning: { label: "warn", tone: "text-alert" },
+  "writer.started": { label: "wrtr", tone: "text-live" },
+  "writer.completed": { label: "wrtr", tone: "text-violet" },
+  "verify.started": { label: "vrfy", tone: "text-live" },
+  "verify.claim": { label: "clm", tone: "text-violet" },
+  "verify.completed": { label: "vrfy", tone: "text-violet" },
+  "gate.awaiting": { label: "gate", tone: "text-live" },
+  "gate.decision": { label: "gate", tone: "text-violet" },
+  "delivery.sent": { label: "dlvr", tone: "text-violet" },
+  "run.completed": { label: "done", tone: "text-violet" },
+  "run.failed": { label: "fail", tone: "text-coral" },
+  warning: { label: "warn", tone: "text-coral" },
 };
 
 export function kindStyle(kind: EventKind): { label: string; tone: string } {

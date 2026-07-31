@@ -1,79 +1,106 @@
 "use client";
 
-import { cell, claimIndex, signOf, substituteClaims } from "@/lib/format";
-import type { Brief } from "@/lib/types";
+import { Citation, renderWithCitations } from "@/components/Citation";
+import { claimIndex, signOf } from "@/lib/format";
+import type { Brief, NumericClaim } from "@/lib/types";
 
-/** The brief itself, rendered as a terminal tape with every claim substituted. */
-export function BriefView({ brief }: { brief: Brief }) {
+/**
+ * The brief, rendered as a document.
+ *
+ * It is the only light surface in the product, and that is the argument: the
+ * chassis is apparatus, this is the artifact a person is being asked to sign.
+ * Every figure appears as a citation chip rather than as text, because in this
+ * system a number is a reference into a verified claim table — never something
+ * the writer typed.
+ */
+export function BriefView({
+  brief,
+  activeClaim,
+  onActiveClaim,
+}: {
+  brief: Brief;
+  activeClaim: string | null;
+  onActiveClaim: (claimId: string | null) => void;
+}) {
   const claims = claimIndex(brief);
+  const prose = (text: string) => renderWithCitations(text, claims, activeClaim, onActiveClaim);
 
   return (
-    <article className="panel ticked">
-      <header className="rule-b px-3 py-2.5">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span className="hdr min-w-[200px] flex-1">
-            <span>Morning brief</span>
-          </span>
-          <span className="text-[10px] uppercase tracking-[0.16em] text-faint">
-            session<span className="mx-1 text-rule-hot">:</span>
-            <span className="text-ink">{brief.generated_for}</span>
-          </span>
+    <article className="doc overflow-hidden">
+      <header className="border-b border-doc-rule px-6 py-6 sm:px-9 sm:py-8">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-doc-muted">
+            AlphaBrief · morning brief
+          </p>
+          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-doc-muted">
+            {brief.generated_for}
+          </p>
         </div>
 
-        <h2 className="mt-2 text-[17px] leading-snug text-amber glow-amber">
-          {substituteClaims(brief.headline, claims)}
+        <h2 className="mt-4 max-w-4xl text-[26px] font-extrabold leading-[1.15] tracking-[-0.03em] text-doc-ink sm:text-[32px]">
+          {prose(brief.headline)}
         </h2>
 
         {brief.partial ? (
-          <p className="mt-2 border border-alert-dim bg-alert/8 px-2.5 py-1.5 text-[11px] text-alert">
-            ▲ PARTIAL COVERAGE — at least one symbol failed to return data and is excluded from the
-            snapshot. Gaps are listed below rather than papered over.
+          <p className="mt-4 rounded-[2px] border-l-2 border-doc-neg bg-doc-neg/8 px-3 py-2 font-mono text-[11px] leading-relaxed text-doc-neg">
+            Partial coverage — at least one symbol returned no data and is excluded from the
+            snapshot. The gaps are listed rather than papered over.
           </p>
         ) : null}
 
-        <p className="mt-2 max-w-4xl text-[12px] leading-relaxed text-muted">
-          {substituteClaims(brief.executive_summary, claims)}
+        <p className="mt-4 max-w-3xl text-[15px] leading-[1.65] text-doc-ink/85">
+          {prose(brief.executive_summary)}
         </p>
       </header>
 
       {brief.snapshot.length > 0 ? (
-        <div className="overflow-x-auto rule-b">
-          <table className="w-full min-w-[820px] border-collapse text-[11.5px]">
+        <div className="thin-scroll overflow-x-auto border-b border-doc-rule">
+          <table className="w-full min-w-[860px] border-collapse font-mono text-[12px]">
             <thead>
-              <tr className="label rule-b text-left">
-                <th className="px-3 py-1.5 font-normal">sym</th>
-                <th className="px-2 py-1.5 font-normal">name</th>
-                <th className="px-2 py-1.5 text-right font-normal">close</th>
-                <th className="px-2 py-1.5 text-right font-normal">1d</th>
-                <th className="px-2 py-1.5 text-right font-normal">30d</th>
-                <th className="px-2 py-1.5 text-right font-normal">vol ann</th>
-                <th className="px-2 py-1.5 text-right font-normal">max dd</th>
-                <th className="px-2 py-1.5 text-right font-normal">p/e</th>
-                <th className="px-3 py-1.5 text-right font-normal">sent</th>
+              <tr className="border-b border-doc-rule text-left">
+                {["symbol", "name", "close", "1d", "30d", "vol ann", "max dd", "p/e", "sentiment"].map(
+                  (heading, index) => (
+                    <th
+                      key={heading}
+                      className={`px-3 py-2 text-[9px] font-normal uppercase tracking-[0.16em] text-doc-muted ${
+                        index >= 2 ? "text-right" : ""
+                      }`}
+                    >
+                      {heading}
+                    </th>
+                  ),
+                )}
               </tr>
             </thead>
             <tbody>
               {brief.snapshot.map((row) => (
-                <tr key={row.ticker} className="border-b border-rule/50 hover:bg-raised">
-                  <td className="px-3 py-2 text-amber">{row.ticker}</td>
-                  <td className="px-2 py-2 text-muted">{row.company ?? "—"}</td>
-                  <td className="px-2 py-2 text-right text-ink">{cell(row.last_close, claims)}</td>
-                  <td className={`px-2 py-2 text-right ${tone(signOf(row.change_1d, claims))}`}>
-                    {cell(row.change_1d, claims)}
+                <tr key={row.ticker} className="border-b border-doc-rule/60 last:border-0">
+                  <td className="px-3 py-2.5 font-bold text-doc-ink">{row.ticker}</td>
+                  <td className="max-w-[220px] truncate px-3 py-2.5 text-doc-muted">
+                    {row.company ?? "—"}
                   </td>
-                  <td className={`px-2 py-2 text-right ${tone(signOf(row.return_30d, claims))}`}>
-                    {cell(row.return_30d, claims)}
-                  </td>
-                  <td className="px-2 py-2 text-right text-muted">
-                    {cell(row.volatility, claims)}
-                  </td>
-                  <td className="px-2 py-2 text-right text-alert/80">
-                    {cell(row.max_drawdown, claims)}
-                  </td>
-                  <td className="px-2 py-2 text-right text-muted">{cell(row.pe_ratio, claims)}</td>
-                  <td className={`px-3 py-2 text-right ${tone(signOf(row.sentiment, claims))}`}>
-                    {cell(row.sentiment, claims)}
-                  </td>
+                  <Cell id={row.last_close} claims={claims} {...{ activeClaim, onActiveClaim }} />
+                  <Cell
+                    id={row.change_1d}
+                    claims={claims}
+                    tone={signOf(row.change_1d, claims)}
+                    {...{ activeClaim, onActiveClaim }}
+                  />
+                  <Cell
+                    id={row.return_30d}
+                    claims={claims}
+                    tone={signOf(row.return_30d, claims)}
+                    {...{ activeClaim, onActiveClaim }}
+                  />
+                  <Cell id={row.volatility} claims={claims} {...{ activeClaim, onActiveClaim }} />
+                  <Cell id={row.max_drawdown} claims={claims} {...{ activeClaim, onActiveClaim }} />
+                  <Cell id={row.pe_ratio} claims={claims} {...{ activeClaim, onActiveClaim }} />
+                  <Cell
+                    id={row.sentiment}
+                    claims={claims}
+                    tone={signOf(row.sentiment, claims)}
+                    {...{ activeClaim, onActiveClaim }}
+                  />
                 </tr>
               ))}
             </tbody>
@@ -81,31 +108,33 @@ export function BriefView({ brief }: { brief: Brief }) {
         </div>
       ) : null}
 
-      <div className="grid gap-px bg-rule md:grid-cols-2">
+      {/* Hairlines come from the cells, not from a background showing through a
+          gap: an odd number of sections would leave that background exposed as a
+          grey block where a cell should be. */}
+      <div className="grid sm:grid-cols-2">
         {brief.key_moves.length > 0 ? (
           <Block title="Key moves">
             {brief.key_moves.map((move, index) => (
-              <p key={`${move.ticker}-${index}`} className="text-[11.5px] leading-relaxed">
-                <span className="mr-2 text-amber">
-                  {move.direction === "up" ? "▲" : move.direction === "down" ? "▼" : "▪"}{" "}
-                  {move.ticker}
-                </span>
-                <span className="text-muted">{substituteClaims(move.narrative, claims)}</span>
+              <p key={`${move.ticker}-${index}`}>
+                <Ticker>{move.ticker}</Ticker>
+                <span className="text-doc-ink/80">{prose(move.narrative)}</span>
               </p>
             ))}
           </Block>
         ) : null}
 
         {brief.news_and_sentiment.length > 0 ? (
-          <Block title="News & sentiment">
+          <Block title="News &amp; sentiment">
             {brief.news_and_sentiment.map((entry) => (
-              <div key={entry.ticker} className="text-[11.5px] leading-relaxed">
-                <span className="mr-2 text-amber">{entry.ticker}</span>
-                <span className="text-muted">{substituteClaims(entry.summary, claims)}</span>
+              <div key={entry.ticker}>
+                <Ticker>{entry.ticker}</Ticker>
+                <span className="text-doc-ink/80">{prose(entry.summary)}</span>
                 {entry.top_headline ? (
-                  <p className="mt-1 border-l border-rule-hot pl-2.5 text-[11px] text-faint">
+                  <p className="mt-1.5 border-l-2 border-doc-rule pl-3 text-[13px] italic leading-relaxed text-doc-muted">
                     “{entry.top_headline}”
-                    {entry.headline_source ? <span> — {entry.headline_source}</span> : null}
+                    {entry.headline_source ? (
+                      <span className="font-mono text-[10px] not-italic"> — {entry.headline_source}</span>
+                    ) : null}
                   </p>
                 ) : null}
               </div>
@@ -114,15 +143,15 @@ export function BriefView({ brief }: { brief: Brief }) {
         ) : null}
 
         {brief.risk_flags.length > 0 ? (
-          <Block title="Risk flags" tone="alert">
+          <Block title="Risk flags" tone="warn">
             {brief.risk_flags.map((flag, index) => (
-              <div key={`${flag.ticker}-${index}`} className="text-[11.5px] leading-relaxed">
-                <span className="mr-2 text-alert">▲ {flag.ticker}</span>
-                <span className="mr-2 border border-alert-dim px-1.5 text-[10px] uppercase text-alert/80">
+              <div key={`${flag.ticker}-${index}`}>
+                <Ticker tone="warn">{flag.ticker}</Ticker>
+                <span className="mr-2 rounded-[2px] border border-doc-neg/40 px-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-doc-neg">
                   {flag.category}
                 </span>
-                <span className="text-muted">{substituteClaims(flag.assessment, claims)}</span>
-                <p className="mt-1 border-l border-alert-dim pl-2.5 text-[11px] text-faint">
+                <span className="text-doc-ink/80">{prose(flag.assessment)}</span>
+                <p className="mt-1.5 border-l-2 border-doc-neg/30 pl-3 text-[13px] italic leading-relaxed text-doc-muted">
                   “{flag.evidence}”
                 </p>
               </div>
@@ -133,20 +162,18 @@ export function BriefView({ brief }: { brief: Brief }) {
         {brief.watch_items.length > 0 ? (
           <Block title="Watch items">
             {brief.watch_items.map((item, index) => (
-              <p key={index} className="text-[11.5px] leading-relaxed text-muted">
-                <span className="mr-2 text-rule-hot">▸</span>
-                {item.ticker ? <span className="mr-2 text-amber">{item.ticker}</span> : null}
-                {substituteClaims(item.item, claims)}
+              <p key={index} className="text-doc-ink/80">
+                {item.ticker ? <Ticker>{item.ticker}</Ticker> : null}
+                {prose(item.item)}
               </p>
             ))}
           </Block>
         ) : null}
 
         {brief.data_gaps.length > 0 ? (
-          <Block title="Data gaps" tone="alert">
+          <Block title="Data gaps" tone="warn">
             {brief.data_gaps.map((gap, index) => (
-              <p key={index} className="text-[11px] text-faint">
-                <span className="mr-2 text-alert-dim">✕</span>
+              <p key={index} className="font-mono text-[12px] leading-relaxed text-doc-muted">
                 {gap}
               </p>
             ))}
@@ -154,36 +181,75 @@ export function BriefView({ brief }: { brief: Brief }) {
         ) : null}
       </div>
 
-      <footer className="border-t border-rule px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-faint">
-        {brief.claims.length} figures · each tool-computed, independently recomputed, human-approved
+      <footer className="border-t border-doc-rule px-6 py-3 font-mono text-[10px] uppercase tracking-[0.16em] text-doc-muted sm:px-9">
+        {brief.claims.length} figures · each computed by a tool, independently recomputed, then
+        signed by a human
       </footer>
     </article>
+  );
+}
+
+function Cell({
+  id,
+  claims,
+  tone = 0,
+  activeClaim,
+  onActiveClaim,
+}: {
+  id: string | null;
+  claims: Map<string, NumericClaim>;
+  tone?: number;
+  activeClaim: string | null;
+  onActiveClaim: (claimId: string | null) => void;
+}) {
+  const colour = tone > 0 ? "text-doc-pos" : tone < 0 ? "text-doc-neg" : "text-doc-ink";
+  return (
+    <td className={`px-3 py-2.5 text-right ${colour}`}>
+      {id ? (
+        <Citation
+          claimId={id}
+          claim={claims.get(id)}
+          active={activeClaim === id}
+          onActiveClaim={onActiveClaim}
+        />
+      ) : (
+        <span className="text-doc-muted">—</span>
+      )}
+    </td>
+  );
+}
+
+function Ticker({ children, tone }: { children: React.ReactNode; tone?: "warn" }) {
+  return (
+    <span
+      className={`mr-2 font-mono text-[11px] font-bold ${
+        tone === "warn" ? "text-doc-neg" : "text-doc-ink"
+      }`}
+    >
+      {children}
+    </span>
   );
 }
 
 function Block({
   title,
   children,
-  tone = "amber",
+  tone,
 }: {
   title: string;
   children: React.ReactNode;
-  tone?: "amber" | "alert";
+  tone?: "warn";
 }) {
   return (
-    <section className="bg-panel px-3 py-3">
-      <p
-        className={`label mb-2 ${tone === "alert" ? "text-alert/80" : "text-amber/80"}`}
+    <section className="border-b border-doc-rule bg-porcelain px-6 py-5 sm:px-9 sm:[&:nth-child(odd)]:border-r">
+      <h3
+        className={`mb-3 font-mono text-[9px] uppercase tracking-[0.22em] ${
+          tone === "warn" ? "text-doc-neg" : "text-doc-muted"
+        }`}
       >
         {title}
-      </p>
-      <div className="space-y-2.5">{children}</div>
+      </h3>
+      <div className="space-y-3 text-[14px] leading-[1.6]">{children}</div>
     </section>
   );
-}
-
-function tone(sign: number): string {
-  if (sign > 0) return "text-phosphor";
-  if (sign < 0) return "text-alert";
-  return "text-muted";
 }

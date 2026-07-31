@@ -1,6 +1,11 @@
 "use client";
 
-/** Per-ticker state completeness, drawn as terminal block meters. */
+/**
+ * Per-ticker state completeness — the signal the supervisor actually routes on.
+ *
+ * It re-plans until every symbol has both halves of its state, so this is the
+ * loop condition made visible rather than a decorative progress bar.
+ */
 export function CompletenessRail({
   tickers,
   completeness,
@@ -9,57 +14,51 @@ export function CompletenessRail({
   completeness: Record<string, number>;
 }) {
   if (tickers.length === 0) return null;
-  const done = Object.values(completeness).filter((value) => value >= 1).length;
+  const done = tickers.filter((ticker) => (completeness[ticker] ?? 0) >= 1).length;
 
   return (
-    <section className="panel px-3 py-2.5">
-      <div className="mb-2 flex items-center gap-3">
+    <section className="panel px-4 py-3.5">
+      <div className="mb-3 flex items-center gap-3">
         <span className="hdr flex-1">
-          <span>State completeness</span>
+          <span>Coverage</span>
         </span>
         <span className="text-[10px] uppercase tracking-[0.14em] text-faint">
-          <span className="text-ink">{done}</span>/{tickers.length} complete
+          <span className={done === tickers.length ? "text-violet" : "text-live"}>{done}</span>
+          <span className="mx-1">/</span>
+          {tickers.length} complete
         </span>
       </div>
 
-      <div className="grid gap-x-6 gap-y-1 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-x-8 gap-y-2 sm:grid-cols-2 xl:grid-cols-3">
         {tickers.map((ticker) => {
-          const value = completeness[ticker] ?? 0;
-          const pct = Math.round(value * 100);
+          const value = Math.min(1, Math.max(0, completeness[ticker] ?? 0));
           const complete = value >= 1;
           return (
-            <div key={ticker} className="flex items-center gap-2.5 text-[11.5px]">
-              <span className="w-[74px] shrink-0 truncate text-ink">{ticker}</span>
+            <div key={ticker} className="flex items-center gap-3 text-[11px]">
+              <span className="w-[62px] shrink-0 truncate text-ink">{ticker}</span>
               <span
-                className={`flex-1 tracking-[-0.06em] ${
-                  complete ? "text-phosphor glow-phos" : "text-amber"
-                }`}
-                aria-hidden="true"
+                className="h-[3px] flex-1 overflow-hidden rounded-full bg-edge"
+                role="img"
+                aria-label={`${ticker} ${Math.round(value * 100)} percent complete`}
               >
-                {meter(value)}
+                <span
+                  className={`block h-full rounded-full transition-[width] duration-500 ${
+                    complete ? "bg-violet" : "bg-live"
+                  }`}
+                  style={{ width: `${value * 100}%` }}
+                />
               </span>
-              <span
-                className={`w-9 shrink-0 text-right ${
-                  complete ? "text-phosphor" : "text-faint"
-                }`}
-              >
-                {pct}%
+              <span className={`w-9 shrink-0 text-right ${complete ? "text-violet" : "text-faint"}`}>
+                {Math.round(value * 100)}%
               </span>
             </div>
           );
         })}
       </div>
 
-      <p className="mt-2 text-[10px] text-faint">
-        market data 60% · news &amp; sentiment 40%
+      <p className="mt-3 text-[10px] text-faint">
+        Market data counts for 60% of a symbol&apos;s state, news and sentiment for 40%.
       </p>
     </section>
   );
-}
-
-/** 20-cell block meter — reads instantly, no layout thrash. */
-function meter(value: number): string {
-  const cells = 20;
-  const filled = Math.round(Math.min(1, Math.max(0, value)) * cells);
-  return "█".repeat(filled) + "░".repeat(cells - filled);
 }

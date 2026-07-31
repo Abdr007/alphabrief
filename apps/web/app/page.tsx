@@ -3,40 +3,61 @@ import { DEFAULT_WATCHLIST } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
 
-const CHAIN = [
-  { id: "01", name: "SUPERVISOR", detail: "plans · fans out both workers in parallel" },
-  { id: "02", name: "MCP TOOLS", detail: "every figure computed by a tool, never a model" },
-  { id: "03", name: "WRITER", detail: "cites verified claims · computes nothing" },
-  { id: "04", name: "VERIFIER", detail: "recomputes each figure from raw bars — code, not an LLM" },
-  { id: "05", name: "HUMAN GATE", detail: "graph pauses · nothing ships unsigned" },
+/**
+ * Three constraints, not three steps — the orchestration field below already
+ * shows the order. What is worth stating up front is what the system is
+ * forbidden from doing, because that is where the guarantee comes from.
+ */
+const CONSTRAINTS = [
+  {
+    rule: "The writer cannot type a number",
+    detail:
+      "The brief schema rejects any narrative containing a bare numeral. A figure can only enter as a reference into the claim table.",
+  },
+  {
+    rule: "Every figure is recomputed by different code",
+    detail:
+      "A deterministic node re-derives each claim from the raw bars — Welford against two-pass, bisect against a linear scan — so agreement is not self-confirmation.",
+  },
+  {
+    rule: "Nothing is delivered unsigned",
+    detail:
+      "The graph suspends at a checkpointed interrupt. It survives a restart, and only an authenticated decision resumes it.",
+  },
 ];
 
 export default function ConsolePage() {
   return (
     <div className="space-y-4">
-      <section className="panel ticked px-4 py-3.5">
-        <p className="text-[10px] uppercase tracking-[0.24em] text-amber-dim">
-          governed research terminal · v1.0
-        </p>
-        <h1 className="mt-1.5 text-[19px] leading-snug tracking-tight text-ink">
-          Watch the agents work —{" "}
-          <span className="text-amber glow-amber">and watch every number get checked.</span>
+      <section className="panel px-6 py-7 sm:px-8 sm:py-9">
+        <p className="eyebrow">Multi-agent research orchestration</p>
+
+        <h1 className="display mt-3 max-w-[24ch] text-[30px] font-extrabold leading-[1.08] text-ink sm:text-[42px]">
+          Agents that cannot
+          <br />
+          make a number up.
         </h1>
-        <p className="mt-2 max-w-3xl text-[11.5px] leading-relaxed text-muted">
-          A supervisor dispatches a data agent and a news agent in parallel; both consume tools over
-          a Model Context Protocol server. A deterministic node then recomputes every figure the
-          writer cited, from the raw price bars, before a human is asked to approve anything.
+
+        <p className="prose mt-5 max-w-[62ch] text-[15px] leading-[1.7] text-muted">
+          A supervisor fans a data agent and a news agent out in parallel; both reach the market only
+          through a Model Context Protocol tool server. The writer that assembles the brief is
+          forbidden from typing a numeral — every figure arrives as a reference like{" "}
+          <span className="cite">+2.14%</span> into a table of tool-computed claims, and a second,
+          deliberately different implementation re-derives each one before anyone is asked to sign.
         </p>
 
-        <ol className="mt-3 grid gap-px overflow-hidden border border-rule bg-rule sm:grid-cols-2 lg:grid-cols-5">
-          {CHAIN.map((step) => (
-            <li key={step.id} className="bg-panel px-2.5 py-2">
-              <p className="text-[10px] text-amber-dim">{step.id}</p>
-              <p className="mt-0.5 text-[11px] tracking-[0.1em] text-ink">{step.name}</p>
-              <p className="mt-1 text-[10px] leading-relaxed text-faint">{step.detail}</p>
+        <ul className="mt-7 grid gap-px overflow-hidden rounded-[3px] border border-edge bg-edge sm:grid-cols-3">
+          {CONSTRAINTS.map((constraint) => (
+            <li key={constraint.rule} className="bg-chassis px-4 py-4">
+              <p className="display text-[14px] font-semibold leading-snug text-ink">
+                {constraint.rule}
+              </p>
+              <p className="prose mt-2 text-[12.5px] leading-[1.55] text-muted">
+                {constraint.detail}
+              </p>
             </li>
           ))}
-        </ol>
+        </ul>
       </section>
 
       <RunConsole defaultWatchlist={DEFAULT_WATCHLIST} />

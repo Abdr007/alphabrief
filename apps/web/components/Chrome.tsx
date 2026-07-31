@@ -10,14 +10,19 @@ interface Health {
   engine?: string;
   mcp_transport?: string;
   langfuse?: boolean;
+  durable_checkpoints?: boolean;
   models?: Record<string, string>;
 }
 
-/** Terminal status bar: link state, model routing, session clock. */
+/**
+ * The chassis: identity, navigation, and an honest readout of how this process
+ * is actually configured — including whether a paused run would survive a
+ * restart, which is a property of the running system rather than of the config
+ * file, and therefore worth showing.
+ */
 export function Chrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [health, setHealth] = useState<Health | null>(null);
-  const [clock, setClock] = useState("--:--:--");
 
   useEffect(() => {
     let cancelled = false;
@@ -34,32 +39,23 @@ export function Chrome({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  useEffect(() => {
-    const tick = () => setClock(new Date().toISOString().slice(11, 19));
-    tick();
-    const timer = setInterval(tick, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
   const online = health?.status === "ok";
+  const onClaude = health?.engine === "anthropic";
 
   return (
-    <div className="crt relative min-h-dvh">
-      {/* ── command strip ─────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-50 border-b border-rule bg-shell/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-x-5 gap-y-2 px-5 py-2.5">
-          <Link href="/" className="flex items-center gap-2.5">
-            <span className="text-[15px] leading-none text-amber glow-amber">▚</span>
-            <span className="text-[13px] font-semibold uppercase tracking-[0.24em] text-ink">
-              Alpha<span className="text-amber">brief</span>
+    <div className="field relative min-h-dvh">
+      <header className="sticky top-0 z-50 border-b border-edge bg-void/85 backdrop-blur-md">
+        <div className="mx-auto flex max-w-[1560px] flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3">
+          <Link href="/" className="flex items-baseline gap-2.5">
+            <span className="display text-[17px] font-extrabold tracking-[-0.03em] text-ink">
+              Alpha<span className="text-violet">brief</span>
+            </span>
+            <span className="hidden text-[9px] uppercase tracking-[0.22em] text-faint sm:inline">
+              orchestration instrument
             </span>
           </Link>
 
-          <span className="hidden text-[10px] uppercase tracking-[0.16em] text-faint sm:inline">
-            governed research terminal
-          </span>
-
-          <nav className="flex items-center gap-0.5 text-[11px] uppercase tracking-[0.14em]">
+          <nav className="flex items-center gap-1 text-[10px] uppercase tracking-[0.16em]">
             {[
               { href: "/", label: "Console" },
               { href: "/archive", label: "Archive" },
@@ -67,10 +63,10 @@ export function Chrome({ children }: { children: React.ReactNode }) {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`border px-2.5 py-1 transition ${
+                className={`btn px-3 py-1.5 ${
                   pathname === item.href
-                    ? "border-amber-dim bg-amber/10 text-amber"
-                    : "border-transparent text-faint hover:border-rule hover:text-ink"
+                    ? "border-violet-dim bg-violet-wash !text-violet"
+                    : "hover:border-edge-hot hover:!text-ink"
                 }`}
               >
                 {item.label}
@@ -78,55 +74,46 @@ export function Chrome({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
 
-          <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] uppercase tracking-[0.12em]">
-            <Field label="link">
-              <span className={online ? "text-phosphor" : "text-alert"}>
+          <div className="ml-auto flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] uppercase tracking-[0.14em]">
+            <Field label="api">
+              <span className={online ? "text-violet" : "text-coral"}>
                 <span
-                  className={`mr-1.5 inline-block h-1.5 w-1.5 align-middle ${
-                    online ? "bg-phosphor blink" : "bg-alert"
+                  className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle ${
+                    online ? "bg-violet blink" : "bg-coral"
                   }`}
+                  aria-hidden
                 />
-                {online ? "online" : "offline"}
+                {online ? "connected" : "unreachable"}
               </span>
             </Field>
 
             {health?.engine ? (
-              <Field label="engine">
-                <span className={health.engine === "anthropic" ? "text-amber" : "text-muted"}>
-                  {health.engine}
+              <Field label="reasoning">
+                <span className={onClaude ? "text-live" : "text-muted"}>
+                  {onClaude ? shortModel(health.models?.worker ?? "claude") : "deterministic"}
                 </span>
               </Field>
             ) : null}
 
-            {health?.models?.supervisor ? (
-              <Field label="route">
-                <span className="text-signal">{shortModel(health.models.supervisor)}</span>
-                <span className="mx-1 text-faint">▸</span>
-                <span className="text-amber">{shortModel(health.models.worker ?? "")}</span>
+            {health?.durable_checkpoints !== undefined ? (
+              <Field label="gate">
+                <span className={health.durable_checkpoints ? "text-violet" : "text-coral"}>
+                  {health.durable_checkpoints ? "survives restart" : "in-memory"}
+                </span>
               </Field>
             ) : null}
-
-            {health?.mcp_transport ? (
-              <Field label="mcp">
-                <span className="text-muted">{health.mcp_transport}</span>
-              </Field>
-            ) : null}
-
-            <Field label="utc">
-              <span className="text-ink">{clock}</span>
-            </Field>
           </div>
         </div>
       </header>
 
-      <main className="relative z-10 mx-auto w-full max-w-[1500px] px-5 py-6">{children}</main>
+      <main className="relative z-10 mx-auto w-full max-w-[1560px] px-5 py-6">{children}</main>
 
-      <footer className="relative z-10 mx-auto w-full max-w-[1500px] border-t border-rule px-5 py-4">
-        <p className="max-w-4xl text-[11px] leading-relaxed text-faint">
-          <span className="text-amber-dim">◆</span> The LLM never does arithmetic. Tools compute
-          over MCP, a deterministic node recomputes every figure in the final brief, and a human
-          gate signs off — hallucinated numbers are impossible by construction, not by
-          prompt-begging.
+      <footer className="relative z-10 mx-auto w-full max-w-[1560px] border-t border-edge px-5 py-5">
+        <p className="max-w-3xl text-[11px] leading-relaxed text-faint">
+          The model never does arithmetic. Tools compute every figure over MCP, a deterministic node
+          recomputes each one from the raw bars using a different implementation, and a human signs
+          before anything ships. Hallucinated numbers are impossible by construction rather than by
+          asking nicely in a prompt.
         </p>
       </footer>
     </div>
@@ -137,12 +124,12 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return (
     <span className="whitespace-nowrap">
       <span className="text-faint">{label}</span>
-      <span className="mx-1 text-rule-hot">:</span>
+      <span className="mx-1.5 text-edge-hot">/</span>
       {children}
     </span>
   );
 }
 
 function shortModel(model: string): string {
-  return model.replace("claude-", "").replace("#deterministic", "").replace(/-\d+$/, "");
+  return model.replace("claude-", "").replace(/-\d{8}$/, "");
 }
