@@ -69,6 +69,8 @@ async def health() -> HealthResponse:
         langfuse=settings.langfuse_enabled,
         smtp=settings.smtp_enabled,
         database=database,
+        # Observed, not inferred: the durable upgrade can fail and fall back.
+        durable_checkpoints=get_run_service().durable_checkpoints,
         watchlist=settings.watchlist,
         models={
             "supervisor": settings.model_supervisor,

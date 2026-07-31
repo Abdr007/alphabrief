@@ -17,9 +17,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 from langgraph.graph.state import CompiledStateGraph
@@ -70,6 +72,47 @@ def watchlist_key_for(tickers: list[str]) -> str:
     return ",".join(sorted({t.strip().upper() for t in tickers if t.strip()}))
 
 
+def sqlite_checkpoint_path(database_url: str) -> Path | None:
+    """Where to checkpoint for a SQLite archive URL, or ``None`` if not on disk.
+
+    An in-memory database (``sqlite://`` or ``sqlite:///:memory:``) has nothing
+    to be durable *to*, so it keeps the in-memory saver and reports itself as
+    volatile rather than pretending otherwise.
+    """
+    match = re.match(r"^sqlite(?:\+\w+)?://", database_url)
+    if match is None:
+        return None
+    # SQLAlchemy spells SQLite as `sqlite://<host>/<path>` with an empty host,
+    # so exactly one slash separates scheme from path: `sqlite:///rel.db` is
+    # relative and `sqlite:////abs.db` is absolute. Stripping more than one
+    # would silently turn every absolute path into a relative one.
+    location = database_url[match.end() :].removeprefix("/")
+    if not location or location == ":memory:":
+        return None
+    path = Path(location)
+    return path.with_name(f"{path.stem}.checkpoints{path.suffix or '.db'}")
+
+
+def _daemonise(connection: Any) -> None:
+    """Let the interpreter exit even if this connection is never closed.
+
+    aiosqlite serves every statement from a worker thread it creates *without*
+    ``daemon=True``, so an unclosed connection does not merely leak — it wedges
+    interpreter shutdown indefinitely, waiting on a thread that only
+    ``close()`` can stop. :meth:`RunService.shutdown` does close it, but a
+    missed shutdown should cost a leaked handle, not a process that never dies.
+
+    Losing an in-flight write to an abrupt exit is acceptable here: every write
+    that mattered was awaited before we reported success, and WAL keeps the file
+    consistent regardless. Reaching for a private attribute is deliberate and
+    guarded — if a future aiosqlite reshapes it, this quietly does nothing.
+    """
+    thread = getattr(connection, "_thread", None)
+    if thread is not None and hasattr(thread, "daemon"):
+        with contextlib.suppress(RuntimeError):
+            thread.daemon = True
+
+
 class RunService:
     """Owns the compiled graph, the checkpointer and the background run tasks."""
 
@@ -84,16 +127,27 @@ class RunService:
         self.repository = repository or get_repository()
         self.bus = bus or get_event_bus()
         self.tracer = tracer or get_tracer()
-        #: True only when checkpoints outlive the process (Postgres).
+        #: True only when checkpoints outlive the process (Postgres or SQLite).
         self._durable_checkpoints = False
         #: Guards the one-time async upgrade performed by `ensure_ready`.
         self._checkpointer_ready = False
-        #: Held so shutdown can close it; only set on the Postgres path.
-        self._pg_connection: Any | None = None
+        #: Held so shutdown can close it; only set on a durable path.
+        self._saver_connection: Any | None = None
         self._checkpointer = self._build_checkpointer()
         self.graph: CompiledStateGraph[Any, Any, Any, Any] = build_graph(self._checkpointer)
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._started_at: dict[str, float] = {}
+
+    @property
+    def durable_checkpoints(self) -> bool:
+        """Whether a run paused at the gate would survive a restart.
+
+        Surfaced rather than inferred from the database URL: the upgrade can
+        fail (an unreachable Postgres, a read-only disk) and degrade to the
+        in-memory saver, and the console must report what is true, not what was
+        configured.
+        """
+        return self._durable_checkpoints
 
     # ------------------------------------------------------------ checkpointer ---
     def _build_checkpointer(self) -> Any:
@@ -115,15 +169,22 @@ class RunService:
         return InMemorySaver(serde=serde)
 
     async def ensure_ready(self) -> None:
-        """Upgrade to a durable checkpointer when Postgres is configured.
+        """Upgrade to a durable checkpointer for the configured database.
 
         Called once during application startup, before reconciliation.
+
+        Both supported databases get a durable saver, because the human gate is
+        the product: a run paused for approval that cannot survive a restart is
+        a run the reviewer can lose by closing a laptop lid. Postgres is used
+        when a Postgres URL is configured; otherwise the default SQLite file is
+        checkpointed too, so a clean clone with no configuration at all still
+        has a gate that outlives the process.
 
         The **async** saver is mandatory here, not a preference: the graph is
         driven by ``ainvoke``, and langgraph's synchronous ``PostgresSaver``
         inherits ``aget_tuple`` from the base class, where it raises
         ``NotImplementedError``. Pairing it with an async graph fails every run
-        the moment the loop opens.
+        the moment the loop opens. ``SqliteSaver`` has the identical defect.
 
         Falls back to the in-memory saver on any connection problem: a database
         outage should cost durability, not the ability to produce briefs.
@@ -133,9 +194,14 @@ class RunService:
         self._checkpointer_ready = True
 
         url = self.settings.database_url
-        if not url.startswith(("postgres://", "postgresql://", "postgresql+")):
+        if url.startswith(("postgres://", "postgresql://", "postgresql+")):
+            await self._upgrade_to_postgres(url)
             return
+        path = sqlite_checkpoint_path(url)
+        if path is not None:
+            await self._upgrade_to_sqlite(path)
 
+    async def _upgrade_to_postgres(self, url: str) -> None:
         try:
             from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
             from psycopg import AsyncConnection
@@ -158,11 +224,43 @@ class RunService:
             )
             return
 
-        self._pg_connection = connection
+        self._adopt(saver, connection, "AsyncPostgresSaver")
+
+    async def _upgrade_to_sqlite(self, path: Path) -> None:
+        """Checkpoint into a file beside the archive database.
+
+        A *separate* file, not the archive itself: SQLAlchemy drives the archive
+        synchronously while the saver drives this one through aiosqlite, and
+        pointing two connections with different drivers at one file trades a
+        clear separation for `database is locked`. WAL is enabled so a reader
+        never blocks the writer.
+        """
+        try:
+            import aiosqlite
+            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+            path.parent.mkdir(parents=True, exist_ok=True)
+            connection = await aiosqlite.connect(str(path))
+            _daemonise(connection)
+            await connection.execute("PRAGMA journal_mode=WAL")
+            saver = AsyncSqliteSaver(connection, serde=build_checkpoint_serde())
+            await saver.setup()
+        except Exception:
+            logger.warning(
+                "SQLite checkpointer unavailable; staying on the in-memory saver",
+                exc_info=True,
+            )
+            return
+
+        self._adopt(saver, connection, f"AsyncSqliteSaver at {path.name}")
+
+    def _adopt(self, saver: Any, connection: Any, label: str) -> None:
+        """Swap in a durable saver and rebuild the graph around it."""
+        self._saver_connection = connection
         self._checkpointer = saver
         self.graph = build_graph(saver)
         self._durable_checkpoints = True
-        logger.info("LangGraph checkpointer: AsyncPostgresSaver (durable)")
+        logger.info("LangGraph checkpointer: %s (durable)", label)
 
     # ------------------------------------------------------------ reconcile ---
     async def _has_checkpoint(self, run_id: str) -> bool:
@@ -333,10 +431,10 @@ class RunService:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self.tracer.flush()
-        if self._pg_connection is not None:
+        if self._saver_connection is not None:
             with contextlib.suppress(Exception):
-                await self._pg_connection.close()
-            self._pg_connection = None
+                await self._saver_connection.close()
+            self._saver_connection = None
 
     # --------------------------------------------------------------- internal ---
     def _context(self, run_id: str, mcp: McpToolClient, budget: BudgetGuard) -> Any:

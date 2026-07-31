@@ -15,13 +15,19 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 
 from app.core.settings import Settings
 from app.models.run import HumanDecision, RunStatus
 from app.services.repository import ActiveRunExistsError, Repository
-from app.services.runner import RunNotResumableError, RunService
+from app.services.runner import (
+    RunNotResumableError,
+    RunService,
+    sqlite_checkpoint_path,
+)
 
 WATCHLIST = "AAPL,MSFT"
 TICKERS = ["AAPL", "MSFT"]
@@ -34,9 +40,7 @@ def repository(temp_database_url: str) -> Repository:
     return repo
 
 
-@pytest.fixture
-def service(temp_database_url: str, repository: Repository) -> RunService:
-    """A run service sharing the test database, as a restarted process would."""
+def _service(temp_database_url: str, repository: Repository) -> RunService:
     return RunService(
         settings=Settings(
             database_url=temp_database_url,
@@ -46,6 +50,21 @@ def service(temp_database_url: str, repository: Repository) -> RunService:
         ),
         repository=repository,
     )
+
+
+@pytest.fixture
+async def service(temp_database_url: str, repository: Repository) -> AsyncIterator[RunService]:
+    """A run service sharing the test database, as a restarted process would.
+
+    Torn down through `shutdown()` rather than dropped: once `ensure_ready` has
+    upgraded to the SQLite saver there is an open aiosqlite connection behind
+    it, and leaking those across a suite exhausts file handles.
+    """
+    instance = _service(temp_database_url, repository)
+    try:
+        yield instance
+    finally:
+        await instance.shutdown()
 
 
 async def _seed(repository: Repository, run_id: str, status: str, key: str = WATCHLIST) -> None:
@@ -95,8 +114,14 @@ class TestOrphanReconciliation:
     async def test_a_paused_run_is_closed_when_checkpoints_are_volatile(
         self, service: RunService, repository: Repository
     ) -> None:
+        """The degraded case: no durable upgrade happened, so the gate is unrecoverable.
+
+        Reached by an in-memory database or a saver that failed to start — not
+        by the default configuration, which is durable. Closing the run is what
+        releases its watchlist; leaving it would strand that watchlist forever.
+        """
         await _seed(repository, "run_gate", str(RunStatus.AWAITING_APPROVAL))
-        assert service._durable_checkpoints is False
+        assert service._durable_checkpoints is False  # `ensure_ready` not called
 
         assert await service.reconcile_orphans() == 1
         record = await repository.get_run("run_gate")
@@ -106,7 +131,7 @@ class TestOrphanReconciliation:
     async def test_a_paused_run_survives_when_the_checkpoint_is_durable(
         self, service: RunService, repository: Repository, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """With Postgres the thread outlives the process, so the gate must be kept."""
+        """When the thread outlives the process, the gate must be kept, not reaped."""
         await _seed(repository, "run_gate", str(RunStatus.AWAITING_APPROVAL))
         monkeypatch.setattr(service, "_durable_checkpoints", True)
 
@@ -198,9 +223,90 @@ class TestCheckpointerIsAsyncCapable:
         assert PostgresSaver.aget_tuple is BaseCheckpointSaver.aget_tuple
         assert AsyncPostgresSaver.aget_tuple is not BaseCheckpointSaver.aget_tuple
 
-    async def test_a_sqlite_url_never_claims_durability(self, service: RunService) -> None:
+    async def test_a_sqlite_file_is_upgraded_to_a_durable_saver(self, service: RunService) -> None:
+        """A clean clone configures nothing, so the default database must be durable.
+
+        The human gate is the product: a run paused for approval that cannot
+        survive a restart is a run the reviewer loses by closing a laptop lid.
+        """
+        assert service._durable_checkpoints is False  # in-memory until upgraded
         await service.ensure_ready()
-        assert service._durable_checkpoints is False
+        assert service._durable_checkpoints is True
+
+        from langgraph.checkpoint.base import BaseCheckpointSaver
+
+        saver = service._checkpointer
+        assert type(saver).aget_tuple is not BaseCheckpointSaver.aget_tuple
+
+    async def test_an_in_memory_database_stays_honest_about_being_volatile(
+        self, repository: Repository
+    ) -> None:
+        """There is nothing to be durable *to*, so it must not claim otherwise."""
+        volatile = RunService(
+            settings=Settings(
+                database_url="sqlite:///:memory:",
+                llm_engine="deterministic",
+                mcp_transport="inmemory",
+                approval_token="test-approval-token",
+            ),
+            repository=repository,
+        )
+        await volatile.ensure_ready()
+        assert volatile._durable_checkpoints is False
+        await volatile.shutdown()
+
+    async def test_the_checkpoint_file_sits_beside_the_archive_not_inside_it(
+        self, temp_database_url: str, service: RunService
+    ) -> None:
+        """Two drivers on one file trade separation for `database is locked`.
+
+        SQLAlchemy drives the archive synchronously; the saver drives its own
+        file through aiosqlite. They must not be the same file.
+        """
+        await service.ensure_ready()
+        archive = temp_database_url.removeprefix("sqlite://").removeprefix("/")
+        checkpoints = sqlite_checkpoint_path(temp_database_url)
+
+        assert checkpoints is not None
+        assert str(checkpoints) != archive
+        assert checkpoints.parent == Path(archive).parent
+        assert checkpoints.exists()
+
+    async def test_a_paused_run_survives_a_restart_on_the_default_database(
+        self, temp_database_url: str, repository: Repository
+    ) -> None:
+        """With no configuration at all, a run parked at the gate outlives the process.
+
+        Two `RunService` instances over one database stand in for a restart: the
+        second inherits nothing in memory, exactly as a fresh process does. The
+        checkpoint is written through the saver rather than by running the graph
+        so the invariant is pinned deterministically, with no network.
+        """
+        from langgraph.checkpoint.base import empty_checkpoint
+
+        await _seed(repository, "run_gate", str(RunStatus.AWAITING_APPROVAL))
+
+        first = _service(temp_database_url, repository)
+        await first.ensure_ready()
+        await first._checkpointer.aput(
+            {"configurable": {"thread_id": "run_gate", "checkpoint_ns": ""}},
+            empty_checkpoint(),
+            {"source": "update", "step": 0, "parents": {}},
+            {},
+        )
+        await first.shutdown()
+
+        restarted = _service(temp_database_url, repository)
+        await restarted.ensure_ready()
+        try:
+            assert await restarted._has_checkpoint("run_gate") is True
+            assert await restarted.reconcile_orphans() == 0
+
+            record = await repository.get_run("run_gate")
+            assert record is not None
+            assert record["status"] == RunStatus.AWAITING_APPROVAL
+        finally:
+            await restarted.shutdown()
 
     async def test_an_unreachable_postgres_degrades_instead_of_crashing(
         self, temp_database_url: str, repository: Repository

@@ -15,10 +15,19 @@ venv/
 .coverage
 htmlcov/
 
+# --- local state -----------------------------------------------------------
+# The approval token the API mints on first boot so the console can approve a
+# brief without anyone configuring a shared secret. Per-checkout, never shared.
+var/
+
 # --- databases -------------------------------------------------------------
 *.db
 *.sqlite
 *.sqlite3
+# WAL sidecars, written beside the checkpoint database.
+*.db-shm
+*.db-wal
+*.db-journal
 
 # --- node / next -----------------------------------------------------------
 node_modules/

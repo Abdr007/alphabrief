@@ -130,6 +130,9 @@ class HealthResponse(BaseModel):
     langfuse: bool
     smtp: bool
     database: str
+    #: Whether a run paused at the human gate would survive a restart of this
+    #: process. False means the checkpointer degraded to the in-memory saver.
+    durable_checkpoints: bool
     watchlist: list[str]
     models: dict[str, str]
 

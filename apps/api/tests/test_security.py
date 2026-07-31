@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 
 from app.core.events import EventBus
@@ -17,6 +22,18 @@ from app.core.settings import Settings
 from app.mcp_server.client import McpToolError
 from app.mcp_server.registry import TOOL_NAMES
 from tests.conftest import connected_context
+
+
+@contextmanager
+def _checkout_at(root: Path | None) -> Iterator[None]:
+    """Point the local-token handshake at a throwaway checkout.
+
+    Without this the suite would mint tokens into the developer's own working
+    tree — a test that mutates the repository it is testing.
+    """
+    with patch("app.core.settings.checkout_root", return_value=root):
+        yield
+
 
 #: Real-world shapes of prompt injection that could arrive in a headline.
 INJECTION_CORPUS = [
@@ -99,12 +116,58 @@ class TestApprovalAuth:
         finally:
             settings_module.get_settings.cache_clear()
 
-    def test_no_default_token_is_ever_shipped(self) -> None:
-        """An unset token must generate a random one, never a guessable constant."""
-        first = Settings(approval_token=None).require_approval_token()
-        second = Settings(approval_token=None).require_approval_token()
+    def test_no_default_token_is_ever_shipped(self, tmp_path: Path) -> None:
+        """An unset token must be minted at random, never a guessable constant."""
+        with _checkout_at(tmp_path):
+            token = Settings(approval_token=None).require_approval_token()
+        assert len(token) >= 32
+        assert token not in ("change-me-to-a-long-random-string", "alphabrief", "")
+
+    def test_local_mints_one_token_that_both_processes_can_read(self, tmp_path: Path) -> None:
+        """The API and the Next console must agree without anyone configuring a secret.
+
+        Otherwise the approve button — the whole point of the human gate — is
+        dead on a fresh clone until the developer invents a shared secret.
+        """
+        with _checkout_at(tmp_path):
+            first = Settings(approval_token=None).require_approval_token()
+            second = Settings(approval_token=None).require_approval_token()
+
+        assert first == second
+        stored = (tmp_path / "var" / "approval_token").read_text(encoding="utf-8").strip()
+        assert stored == first
+
+    def test_the_minted_token_is_not_world_readable(self, tmp_path: Path) -> None:
+        with _checkout_at(tmp_path):
+            Settings(approval_token=None).require_approval_token()
+        mode = (tmp_path / "var" / "approval_token").stat().st_mode
+        assert mode & 0o077 == 0
+
+    def test_production_never_trusts_a_file_on_disk(self, tmp_path: Path) -> None:
+        """A planted file must not become the credential of a deployment.
+
+        Production has no second local process to hand a secret to, so it keeps
+        the fail-closed behaviour: random per process, and an operator who set
+        nothing simply cannot approve.
+        """
+        planted = tmp_path / "var" / "approval_token"
+        planted.parent.mkdir(parents=True)
+        planted.write_text("attacker-planted-token\n", encoding="utf-8")
+
+        with _checkout_at(tmp_path):
+            first = Settings(approval_token=None, environment="production").require_approval_token()
+            second = Settings(
+                approval_token=None, environment="production"
+            ).require_approval_token()
+
         assert first != second
-        assert len(first) >= 32
+        assert "attacker-planted-token" not in (first, second)
+
+    def test_a_container_without_a_checkout_falls_back_instead_of_crashing(self) -> None:
+        """`checkout_root()` is None in an image that copied only `apps/api`."""
+        with _checkout_at(None):
+            token = Settings(approval_token=None).require_approval_token()
+        assert len(token) >= 32
 
 
 class TestToolWhitelist:

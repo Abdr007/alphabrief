@@ -64,13 +64,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Runs inherited from a previous process hold their watchlist's single active
     # slot forever unless they are closed here.
     await service.reconcile_orphans()
+    # Mint the approval token now rather than on the first authenticated request.
+    # Locally the console reads it from disk to authenticate, so leaving it lazy
+    # deadlocks: the file only appears after an approval that cannot succeed
+    # without it.
+    settings.require_approval_token()
     logger.info(
-        "AlphaBrief %s ready — engine=%s mcp=%s langfuse=%s smtp=%s",
+        "AlphaBrief %s ready — engine=%s mcp=%s langfuse=%s smtp=%s checkpoints=%s",
         __version__,
         settings.resolved_engine,
         settings.mcp_transport,
         settings.langfuse_enabled,
         settings.smtp_enabled,
+        "durable" if service.durable_checkpoints else "in-memory",
     )
     app.state.settings = settings
     try:

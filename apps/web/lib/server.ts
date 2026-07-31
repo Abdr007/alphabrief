@@ -8,13 +8,63 @@
 
 import "server-only";
 
-export const API_BASE = (process.env.ALPHABRIEF_API_URL ?? "http://127.0.0.1:7860").replace(
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
+export const API_BASE = (process.env.ALPHABRIEF_API_URL ?? "http://127.0.0.1:7877").replace(
   /\/+$/,
   "",
 );
 
-const APPROVAL_TOKEN = process.env.ALPHABRIEF_APPROVAL_TOKEN ?? "";
 const CRON_SECRET = process.env.CRON_SECRET ?? "";
+
+/**
+ * The checkout root, found by the two application directories — the mirror of
+ * `checkout_root()` in `apps/api/app/core/settings.py`. Returns null on a
+ * deployed console, which has no checkout and must be configured explicitly.
+ */
+function checkoutRoot(): string | null {
+  let directory = process.cwd();
+  for (;;) {
+    if (existsSync(join(directory, "apps", "api")) && existsSync(join(directory, "apps", "web"))) {
+      return directory;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+
+let cachedLocalToken: string | null = null;
+
+/**
+ * The approval bearer token.
+ *
+ * `ALPHABRIEF_APPROVAL_TOKEN` wins, and is the only source in a deployment. On
+ * a fresh local clone nobody has configured one, so the API mints a token into
+ * a gitignored per-checkout file on first boot and this reads it — otherwise
+ * the approve button would be dead until the developer invented a secret and
+ * pasted it into two places. Read lazily, never at module load: the console can
+ * legitimately start before the API has minted the file.
+ */
+function approvalToken(): string {
+  const configured = process.env.ALPHABRIEF_APPROVAL_TOKEN;
+  if (configured) return configured;
+  if (cachedLocalToken) return cachedLocalToken;
+
+  const root = checkoutRoot();
+  if (root === null) return "";
+  try {
+    const value = readFileSync(join(root, "var", "approval_token"), "utf8").trim();
+    if (value) {
+      cachedLocalToken = value;
+      return value;
+    }
+  } catch {
+    // Not minted yet — the API has never started. Reported as a 503 below.
+  }
+  return "";
+}
 
 export const DEFAULT_WATCHLIST = (
   process.env.ALPHABRIEF_DEFAULT_WATCHLIST ?? "AAPL,MSFT,NVDA,TSLA,AMZN"
@@ -50,10 +100,15 @@ export async function callApi<T>(path: string, options: ApiOptions = {}): Promis
   const headers: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (authenticated) {
-    if (!APPROVAL_TOKEN) {
-      throw new ApiError(503, "ALPHABRIEF_APPROVAL_TOKEN is not configured on the server.");
+    const token = approvalToken();
+    if (!token) {
+      throw new ApiError(
+        503,
+        "No approval token available. Locally this is minted by the API on first " +
+          "boot — start it with `make api`. In a deployment, set ALPHABRIEF_APPROVAL_TOKEN.",
+      );
     }
-    headers.Authorization = `Bearer ${APPROVAL_TOKEN}`;
+    headers.Authorization = `Bearer ${token}`;
   }
 
   const controller = new AbortController();

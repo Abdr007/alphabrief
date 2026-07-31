@@ -8,12 +8,17 @@ from __future__ import annotations
 
 import secrets
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_WATCHLIST: tuple[str, ...] = ("AAPL", "MSFT", "NVDA", "TSLA", "AMZN")
+
+#: Path of the shared local-development approval token, relative to the checkout
+#: root. Mirrored by `apps/web/lib/server.ts`; change both together.
+LOCAL_TOKEN_RELPATH = ("var", "approval_token")
 
 #: Model routing by task weight (spec §3 "Models"). Haiku plans, Sonnet works.
 SUPERVISOR_MODEL = "claude-haiku-4-5"
@@ -104,7 +109,8 @@ class Settings(BaseSettings):
     #: Bearer token required by the approval endpoints. Auto-generated when unset
     #: so that a deployment can never accidentally ship a well-known default.
     approval_token: str | None = None
-    cors_allow_origins: str = "http://localhost:3000"
+    #: The console's own origin. Never "*": these endpoints take a bearer token.
+    cors_allow_origins: str = "http://localhost:3001,http://127.0.0.1:3001"
     #: Hard ceiling on any single inbound request body (bytes).
     max_request_bytes: int = 64 * 1024
 
@@ -144,17 +150,74 @@ class Settings(BaseSettings):
         return "anthropic" if self.anthropic_api_key else "deterministic"
 
     def require_approval_token(self) -> str:
-        """Return the approval bearer token, generating one on first use.
+        """Return the approval bearer token, minting one on first use.
 
-        There is deliberately no default value: an unset token yields a fresh
-        random one per process rather than a well-known constant an attacker
-        could guess against a deployment that forgot to configure it.
+        There is deliberately no default value: a committed constant would be a
+        well-known credential on every deployment that forgot to configure one.
+
+        Local development still needs *two* processes — this API and the Next
+        console — to agree on a token nobody configured, or the approve button
+        is dead on a fresh clone. So on `local` the token is minted once into a
+        gitignored per-checkout file that both read. `production` never gets
+        that handshake: there an unset token stays random per process, which
+        fails closed rather than trusting a file an attacker might plant.
         """
         token = self.approval_token
+        if not token and self.environment == "local":
+            token = read_or_mint_local_token()
         if not token:
             token = secrets.token_urlsafe(32)
-            self.approval_token = token
+        self.approval_token = token
         return token
+
+
+def checkout_root() -> Path | None:
+    """The repository root, or ``None`` when running from a container image.
+
+    Identified by the two application directories rather than `.git`, so it is
+    also correct for a source tarball. A container copies only `apps/api`, so
+    this returns ``None`` there — which is the intended answer, since the token
+    handshake is a local-development affair.
+    """
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "apps" / "api").is_dir() and (parent / "apps" / "web").is_dir():
+            return parent
+    return None
+
+
+def read_or_mint_local_token() -> str | None:
+    """Read the shared local approval token, creating it if this is the first run.
+
+    Created with ``exist_ok=False`` so that two processes racing on first boot
+    cannot each mint a different token and then disagree about every approval:
+    the loser of the race falls through to reading what the winner wrote.
+    Returns ``None`` if there is nowhere to write, leaving the caller to fall
+    back to a per-process token.
+    """
+    root = checkout_root()
+    if root is None:
+        return None
+    path = root.joinpath(*LOCAL_TOKEN_RELPATH)
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    except OSError:
+        pass
+
+    token = secrets.token_urlsafe(32)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(mode=0o600, exist_ok=False)
+        path.write_text(f"{token}\n", encoding="utf-8")
+    except FileExistsError:
+        try:
+            return path.read_text(encoding="utf-8").strip() or None
+        except OSError:
+            return None
+    except OSError:
+        return None
+    return token
 
 
 @lru_cache(maxsize=1)
