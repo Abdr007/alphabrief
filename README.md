@@ -16,10 +16,12 @@ human approves before anything ships.
 
 | | |
 | --- | --- |
-| **Stack** | LangGraph · MCP (Model Context Protocol) · Claude Sonnet 4.6 + Haiku 4.5 · FastAPI · yfinance · Next.js 15 · Neon Postgres · Langfuse · Docker · GCP Cloud Run · Terraform · Vercel Cron |
-| **Cost** | `$0`. yfinance and RSS are free and keyless; Cloud Run, Vercel, Neon and Langfuse free tiers; ~$0.05–0.15 of Claude per full 5-ticker brief |
-| **Quality gates** | ruff · ruff-format · mypy `--strict` · 190 pytest tests · eslint · tsc · `next build` — all zero-warning |
+| **Live** | Console <https://alphabrief-jade.vercel.app> · API <https://Abdr007-alphabrief.hf.space/health> |
+| **Stack** | LangGraph · MCP (Model Context Protocol) · Claude Sonnet 4.6 + Haiku 4.5 · FastAPI · yfinance · Next.js 15 · Neon Postgres · Langfuse · Docker · Hugging Face Spaces · Vercel Cron |
+| **Cost** | `$0`. yfinance and RSS are free and keyless; Vercel, Neon and Langfuse free tiers; ~$0.05–0.15 of Claude per full 5-ticker brief |
+| **Quality gates** | ruff · ruff-format · mypy `--strict` · 217 pytest tests · eslint · tsc · `next build` — all zero-warning |
 | **Verification** | 100% of numeric claims recomputed from raw price bars before delivery |
+| **Configuration** | None required. A clean clone runs end to end — live data, the full graph, verification, and a durable approval gate — with no `.env` at all |
 
 ---
 
@@ -179,30 +181,39 @@ Python 3.12 (via [uv](https://docs.astral.sh/uv/)) and Node 20+.
 ### 1. API
 
 ```bash
-cd apps/api
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -e ".[dev]"
-
-cp ../../.env.example ../../.env      # then edit
-.venv/bin/uvicorn app.main:app --port 7877 --reload
+make install
+make api
 ```
 
 Open <http://127.0.0.1:7877/docs>.
 
-**You do not need a Claude API key to run this.** With `ANTHROPIC_API_KEY`
-unset, the app uses a deterministic engine that drives the *identical* graph,
-the *identical* MCP tools and the *identical* verifier — only the model's
-decision-making is replaced by rules. Market data is still live. This is what
-keeps CI and the 20-run eval free. Add the key and it switches to Claude.
+**You do not need to configure anything, including a `.env`.** With no
+configuration at all the system runs end to end: live market data, the full
+multi-agent graph, the MCP tool server, numeric verification, a human approval
+gate that survives a restart, and the archive.
+
+Two things make that true rather than aspirational:
+
+* **No Claude key required.** With `ANTHROPIC_API_KEY` unset the app uses a
+  deterministic engine that drives the *identical* graph, the *identical* MCP
+  tools and the *identical* verifier — only the model's decision-making is
+  replaced by rules. Market data is still live. This is what keeps CI and the
+  20-run eval free. Add the key and it switches to Claude; the API reports which
+  engine is actually in use, so a number measured in one mode cannot be mistaken
+  for the other.
+* **No shared secret to invent.** The approval endpoints take a bearer token and
+  there is deliberately no committed default. On first boot the API mints one
+  into `var/approval_token` (mode `600`, gitignored) and the console reads the
+  same file, so the approve button works on a fresh clone. Setting
+  `ENVIRONMENT=production` disables that handshake and requires an explicit
+  `APPROVAL_TOKEN` — a deployment has no shared filesystem with its console, and
+  trusting a file there would let anything able to write to the image supply the
+  credential.
 
 ### 2. Web console
 
 ```bash
-cd apps/web
-npm install
-ALPHABRIEF_API_URL=http://127.0.0.1:7877 \
-ALPHABRIEF_APPROVAL_TOKEN=<same as APPROVAL_TOKEN> \
-npm run dev
+make web
 ```
 
 Open <http://localhost:3001> and press **RUN**.
@@ -223,15 +234,44 @@ make eval       # 20 scored runs → eval/results.md
 
 | Service | Free tier used | Limit to respect |
 | --- | --- | --- |
-| **GCP Cloud Run** *(primary API host)* | 2M requests + 360k GB-seconds/month, forever | Keep `min_instance_count = 0`; 1 vCPU / 512Mi. Needs a card on file, though this usage does not bill |
-| **Koyeb** *(no-card fallback, untested)* | 1 web service from a Docker image | 0.1 vCPU / 512Mi. pandas and numpy arrive via yfinance, so memory is tight — a sibling project with a heavier stack was OOM-killed at this size |
+| **Hugging Face Spaces** *(the API host in use)* | Docker Space on port 7860 | Ephemeral filesystem — set `DATABASE_URL` to Neon, or a run parked at the gate is lost when the Space sleeps. `make deploy-space` |
+| **GCP Cloud Run** *(alternative)* | 2M requests + 360k GB-seconds/month, forever | Keep `min_instance_count = 0`; 1 vCPU / 512Mi. Needs a card on file, though this usage does not bill |
 | **Vercel** | Hobby: web + Cron | Cron on Hobby is once/day — exactly the 07:00 run |
 | **Neon** | Free Postgres | Ample for runs, briefs, approvals |
 | **Langfuse** | Free tier | Ample for traces |
 | **yfinance / RSS / Gmail SMTP** | Free, keyless / app password | Cached per run; polite rate limiting |
 | **Claude API** | Your key | Haiku-routed supervisor + capped iterations → ~$0.05–0.15 per brief |
 
-### GCP Cloud Run (recommended)
+### Hugging Face Spaces (the API host in use)
+
+```bash
+make space-check     # preflight; needs no credentials, so CI can gate it
+make deploy-space    # create/redeploy, idempotent
+```
+
+The image already listens on 7860, which is what Spaces routes to. The Dockerfile
+builds from the repository root because Spaces builds `./Dockerfile` with the
+repository as its context and offers no way to point it elsewhere — `make docker`
+uses the same context, so the image built locally is the image the platform
+builds. The deploy pushes an orphan commit rather than the branch: the Hub scans
+a pushed ref's whole history for binary files, and reads Space configuration from
+README front matter, which GitHub would otherwise render as a table above the
+project title.
+
+Non-secret configuration lives in `SPACE_VARIABLES` in `scripts/deploy_space.py`
+and is applied on every deploy, so a Space's settings are whatever the repository
+says rather than whatever someone last typed into a web form.
+`test_deploy_space.py` builds a real `Settings` from that dict, so a bad value
+fails a test here instead of a remote build three minutes later.
+
+Two secrets must be set by hand under *Settings → Variables and secrets*:
+
+| Secret | Why it is not optional here |
+| --- | --- |
+| `APPROVAL_TOKEN` | `ENVIRONMENT=production` disables the local token-file handshake, so without this each process invents its own token and nothing can be approved. Must match `ALPHABRIEF_APPROVAL_TOKEN` on the console. |
+| `DATABASE_URL` | A Space has an ephemeral filesystem. The default SQLite archive *and its checkpoints* vanish when the Space sleeps, taking any run parked at the approval gate with it. |
+
+### GCP Cloud Run (alternative)
 
 ```bash
 PROJECT=your-project
@@ -332,9 +372,30 @@ scheduled path is a plain authenticated HTTP call that is trivial to test.
 
 ## Visual identity
 
-AlphaBrief is an **amber phosphor terminal**: true black `#08090b`, amber
-`#ffb454`, phosphor green `#35d07f` for verified figures, monospace throughout,
-ruled columns and CRT scanlines. Not a dashboard — a trading-floor instrument.
+One idea drives the whole surface: **the machine is dark, the document it
+produces is paper, and the human gate is the seam between them.** The chassis is
+graphite `#0a0c10` and reads as apparatus — mono type, hairline rules, luminance
+instead of colour for "live". The brief itself renders on porcelain `#f4f2ec`,
+because that is the artifact a person is being asked to sign.
+
+Colour is rationed to a vocabulary that matches what the system proves: white is
+happening now, violet `#7c6bff` is settled or agreed, coral `#ff6b5b` is
+divergence. Nothing is coloured merely to look busy.
+
+Two devices carry it:
+
+* **The orchestration field** draws the real graph topology, with the parallel
+  fan-out bracketed and the return edge to the supervisor labelled. Nodes ignite
+  from the live event stream. A row of pills would imply a pipeline, and the
+  whole point of the supervisor pattern is that this is not one.
+* **The convergence lattice** plots every figure twice — as the writer wrote it,
+  and as `recompute.py` independently re-derived it — against the tolerance band
+  it had to land inside. Agreement shows up as *coincidence*, the recompute ring
+  closing around the claim, rather than as a green tick you have to trust.
+
+Figures in the brief render as citation chips rather than substituted text, since
+a number here really is a reference into a verified claim table; hovering one
+lights its track in the lattice.
 
 That is a deliberate departure from the build spec, which asked all three
 portfolio demos to share one dark/cyan design system. Two of them already had

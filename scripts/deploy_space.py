@@ -58,7 +58,7 @@ SPACE_VARIABLES: Final[dict[str, str]] = {
     # The console proxies every call server-side, so the browser never calls this
     # API directly and CORS is a second line rather than the first. Never "*":
     # these endpoints take a bearer token.
-    "CORS_ALLOW_ORIGINS": "https://alphabrief.vercel.app",
+    "CORS_ALLOW_ORIGINS": "https://alphabrief-jade.vercel.app",
     "LANGFUSE_HOST": "https://cloud.langfuse.com",
     "DEFAULT_WATCHLIST": "AAPL,MSFT,NVDA,TSLA,AMZN",
     # A Space sleeps and wakes on a fresh filesystem, so a run parked at the gate
